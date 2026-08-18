@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<title>What Is This Tablet Running?</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Every colour is declared literally in the base rules, because Internet
+   Explorer ignores CSS variables entirely. The dark-theme blocks below only
+   override. IE never reaches them, and gets a complete light page. */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0;
+  background: #e7eaef;
+  color: #12161c;
+  font-family: "IBM Plex Sans", "Segoe UI", Tahoma, Geneva, sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-text-size-adjust: 100%;
+}
+
+.wrap { max-width: 700px; margin: 0 auto; padding: 28px 18px 64px; }
+
+/* ---- nameplate header ---- */
+
+.eyebrow {
+  font-family: "IBM Plex Mono", Consolas, Monaco, monospace;
+  font-size: 11px; font-weight: 600;
+  letter-spacing: .18em; text-transform: uppercase;
+  color: #858e9c;
+  margin: 0 0 10px;
+}
+
+h1 {
+  font-family: "IBM Plex Sans Condensed", "Segoe UI", Tahoma, sans-serif;
+  font-weight: 700;
+  font-size: 34px; line-height: 1.1;
+  letter-spacing: -.015em;
+  margin: 0 0 10px;
+  text-wrap: balance;
+}
+
+.lede { color: #58616e; font-size: 15.5px; margin: 0 0 26px; max-width: 62ch; }
+
+/* ---- verdict readout ---- */
+
+.verdict {
+  background: #ffffff;
+  border: 1px solid #d3d9e1;
+  border-left: 6px solid #858e9c;
+  padding: 20px 22px;
+  margin: 0 0 30px;
+}
+.verdict.pass { border-left-color: #1b6b4a; }
+.verdict.warn { border-left-color: #8a5a00; }
+.verdict.fail { border-left-color: #a62b21; }
+
+.verdict-label {
+  font-family: "IBM Plex Sans Condensed", "Segoe UI", sans-serif;
+  font-weight: 700; font-size: 27px; line-height: 1.15;
+  letter-spacing: -.01em;
+  margin: 0 0 6px;
+  color: #12161c;
+}
+.verdict.pass .verdict-label { color: #1b6b4a; }
+.verdict.warn .verdict-label { color: #8a5a00; }
+.verdict.fail .verdict-label { color: #a62b21; }
+
+.verdict-note { margin: 0; color: #58616e; font-size: 15px; }
+
+/* ---- panel ---- */
+
+h2 {
+  font-family: "IBM Plex Mono", Consolas, monospace;
+  font-size: 11px; font-weight: 600;
+  letter-spacing: .18em; text-transform: uppercase;
+  color: #858e9c;
+  margin: 34px 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #d3d9e1;
+}
+
+.panel { background: #ffffff; border: 1px solid #d3d9e1; }
+
+.check {
+  padding: 13px 16px;
+  border-bottom: 1px solid #eceff3;
+}
+.check:last-child { border-bottom: none; }
+
+.check-head {
+  display: flex;
+  -webkit-box-align: center;
+  align-items: center;
+  -webkit-box-pack: justify;
+  justify-content: space-between;
+}
+
+.check-name {
+  font-weight: 600; font-size: 15.5px;
+  padding-right: 12px;
+}
+
+.chip {
+  font-family: "IBM Plex Mono", Consolas, monospace;
+  font-size: 11px; font-weight: 600;
+  letter-spacing: .1em; text-transform: uppercase;
+  padding: 3px 9px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.chip.pass { background: #dcefe6; color: #1b6b4a; border-color: #b9ddcc; }
+.chip.fail { background: #f7e1df; color: #a62b21; border-color: #edc3bf; }
+.chip.warn { background: #f8ebd2; color: #8a5a00; border-color: #e7d3aa; }
+
+.check-why {
+  margin: 5px 0 0;
+  font-size: 14px;
+  color: #58616e;
+  max-width: 60ch;
+}
+
+/* ---- device readout ---- */
+
+.readout {
+  background: #ffffff;
+  border: 1px solid #d3d9e1;
+  padding: 4px 16px;
+}
+.readout dl { margin: 0; }
+.readout .line {
+  padding: 9px 0;
+  border-bottom: 1px solid #eceff3;
+  display: flex;
+  -webkit-box-pack: justify;
+  justify-content: space-between;
+  -webkit-box-align: baseline;
+  align-items: baseline;
+}
+.readout .line:last-child { border-bottom: none; }
+.readout dt {
+  font-size: 13.5px; color: #58616e;
+  padding-right: 14px;
+}
+.readout dd {
+  margin: 0;
+  font-family: "IBM Plex Mono", Consolas, monospace;
+  font-size: 13.5px; font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  word-break: break-word;
+}
+
+pre.report {
+  background: #f2f4f7;
+  border: 1px solid #d3d9e1;
+  color: #12161c;
+  font-family: "IBM Plex Mono", Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  padding: 14px 16px;
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.foot {
+  margin: 30px 0 0;
+  font-size: 13.5px;
+  color: #858e9c;
+  max-width: 62ch;
+}
+
+.ua {
+  font-family: "IBM Plex Mono", Consolas, monospace;
+  font-size: 12px;
+  color: #58616e;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+/* ---- dark theme: overrides only ---- */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) body { background: #10141a; color: #e9edf3; }
+  :root:not([data-theme="light"]) .lede,
+  :root:not([data-theme="light"]) .verdict-note,
+  :root:not([data-theme="light"]) .check-why,
+  :root:not([data-theme="light"]) .readout dt,
+  :root:not([data-theme="light"]) .ua { color: #9aa5b4; }
+  :root:not([data-theme="light"]) .eyebrow,
+  :root:not([data-theme="light"]) h2,
+  :root:not([data-theme="light"]) .foot { color: #6c7787; }
+  :root:not([data-theme="light"]) h2 { border-bottom-color: #2b3340; }
+  :root:not([data-theme="light"]) .verdict,
+  :root:not([data-theme="light"]) .panel,
+  :root:not([data-theme="light"]) .readout { background: #171c24; border-color: #2b3340; }
+  :root:not([data-theme="light"]) .check,
+  :root:not([data-theme="light"]) .readout .line { border-bottom-color: #232b36; }
+  :root:not([data-theme="light"]) .verdict-label { color: #e9edf3; }
+  :root:not([data-theme="light"]) .verdict.pass { border-left-color: #4fc896; }
+  :root:not([data-theme="light"]) .verdict.warn { border-left-color: #e0ae55; }
+  :root:not([data-theme="light"]) .verdict.fail { border-left-color: #f0837a; }
+  :root:not([data-theme="light"]) .verdict.pass .verdict-label { color: #4fc896; }
+  :root:not([data-theme="light"]) .verdict.warn .verdict-label { color: #e0ae55; }
+  :root:not([data-theme="light"]) .verdict.fail .verdict-label { color: #f0837a; }
+  :root:not([data-theme="light"]) .chip.pass { background: #12332a; color: #4fc896; border-color: #1e4d3c; }
+  :root:not([data-theme="light"]) .chip.fail { background: #3a1d1b; color: #f0837a; border-color: #5a2d29; }
+  :root:not([data-theme="light"]) .chip.warn { background: #382b12; color: #e0ae55; border-color: #55421d; }
+  :root:not([data-theme="light"]) pre.report { background: #1f2630; border-color: #2b3340; color: #e9edf3; }
+  :root:not([data-theme="light"]) .readout dd { color: #e9edf3; }
+}
+
+:root[data-theme="dark"] body { background: #10141a; color: #e9edf3; }
+:root[data-theme="dark"] .lede,
+:root[data-theme="dark"] .verdict-note,
+:root[data-theme="dark"] .check-why,
+:root[data-theme="dark"] .readout dt,
+:root[data-theme="dark"] .ua { color: #9aa5b4; }
+:root[data-theme="dark"] .eyebrow,
+:root[data-theme="dark"] h2,
+:root[data-theme="dark"] .foot { color: #6c7787; }
+:root[data-theme="dark"] h2 { border-bottom-color: #2b3340; }
+:root[data-theme="dark"] .verdict,
+:root[data-theme="dark"] .panel,
+:root[data-theme="dark"] .readout { background: #171c24; border-color: #2b3340; }
+:root[data-theme="dark"] .check,
+:root[data-theme="dark"] .readout .line { border-bottom-color: #232b36; }
+:root[data-theme="dark"] .verdict-label { color: #e9edf3; }
+:root[data-theme="dark"] .verdict.pass { border-left-color: #4fc896; }
+:root[data-theme="dark"] .verdict.warn { border-left-color: #e0ae55; }
+:root[data-theme="dark"] .verdict.fail { border-left-color: #f0837a; }
+:root[data-theme="dark"] .verdict.pass .verdict-label { color: #4fc896; }
+:root[data-theme="dark"] .verdict.warn .verdict-label { color: #e0ae55; }
+:root[data-theme="dark"] .verdict.fail .verdict-label { color: #f0837a; }
+:root[data-theme="dark"] .chip.pass { background: #12332a; color: #4fc896; border-color: #1e4d3c; }
+:root[data-theme="dark"] .chip.fail { background: #3a1d1b; color: #f0837a; border-color: #5a2d29; }
+:root[data-theme="dark"] .chip.warn { background: #382b12; color: #e0ae55; border-color: #55421d; }
+:root[data-theme="dark"] pre.report { background: #1f2630; border-color: #2b3340; color: #e9edf3; }
+:root[data-theme="dark"] .readout dd { color: #e9edf3; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <p class="eyebrow">Load Tracker &middot; Compatibility report</p>
+  <h1>What is this tablet running?</h1>
+  <p class="lede">Open this page on the tablet the S&amp;C coach will actually use. It reports which browser it really is and whether the app will run on it. Read the box below out loud, or send a photo of this screen.</p>
+
+  <div class="verdict" id="verdict">
+    <p class="verdict-label" id="verdict-label">The checks did not run</p>
+    <p class="verdict-note" id="verdict-note">If you are seeing this message, this browser could not run even the simple test script on this page &mdash; which is itself a strong sign that it is a very old browser. Report that.</p>
+  </div>
+
+  <h2>Browser</h2>
+  <div class="readout" id="browser-readout">
+    <dl><div class="line"><dt>Not detected</dt><dd>&mdash;</dd></div></dl>
+  </div>
+
+  <h2>What the app needs</h2>
+  <div class="panel" id="checks"></div>
+
+  <h2>Screen &amp; device</h2>
+  <div class="readout" id="device-readout"></div>
+
+  <h2>Copy this back</h2>
+  <pre class="report" id="report">Not generated.</pre>
+
+  <p class="foot">Nothing on this page is stored or sent anywhere. It only reads what the browser already tells every website it visits.</p>
+
+</div>
+
+<script>
+/* Written in old-fashioned JavaScript on purpose: no arrow functions, no
+   template strings, no const/let, no Promises. If this script needed any of
+   those, it would fail silently on the exact browser it exists to identify. */
+(function () {
+  'use strict';
+
+  var ua = navigator.userAgent || '';
+
+  function el(id) { return document.getElementById(id); }
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  /* ---- feature tests ---- */
+
+  function inObj(obj, key) {
+    try { return key in obj; } catch (e) { return false; }
+  }
+
+  function cssSupports(prop, val) {
+    if (window.CSS && window.CSS.supports) {
+      try { return !!window.CSS.supports(prop, val); } catch (e) { /* fall through */ }
+    }
+    try {
+      var d = document.createElement('div');
+      d.style[prop] = val;
+      return d.style[prop] === val;
+    } catch (e) { return false; }
+  }
+
+  function cssVarsSupported() {
+    if (window.CSS && window.CSS.supports) {
+      try { return !!window.CSS.supports('--probe', '1'); } catch (e) { /* fall through */ }
+    }
+    try {
+      var d = document.createElement('div');
+      if (!d.style.setProperty) return false;
+      d.style.setProperty('--probe', '1');
+      return d.style.getPropertyValue('--probe') === '1';
+    } catch (e) { return false; }
+  }
+
+  function syntaxOK(src) {
+    try { new Function(src); return true; } catch (e) { return false; }
+  }
+
+  /* Each check: what it is in plain words, and what breaks without it. */
+  var CHECKS = [
+    {
+      name: 'Modern JavaScript',
+      why: 'The whole app is written in the current form of JavaScript. Without this, not one screen loads.',
+      critical: true,
+      test: function () { return syntaxOK('var f = (a) => a;'); }
+    },
+    {
+      name: 'App modules',
+      why: 'The app is split into separate files that load each other. Without this, nothing starts.',
+      critical: true,
+      test: function () { return inObj(document.createElement('script'), 'noModule'); }
+    },
+    {
+      name: 'Promises',
+      why: 'How the app waits for saved data without freezing the screen. Without this, saving and loading break.',
+      critical: true,
+      test: function () { return typeof window.Promise === 'function'; }
+    },
+    {
+      name: 'On-device database',
+      why: 'Where every practice, drill and player is stored on this tablet. Without this, nothing can be saved.',
+      critical: true,
+      test: function () { try { return !!window.indexedDB; } catch (e) { return false; } }
+    },
+    {
+      name: 'Style variables',
+      why: 'How the app handles colours, including dark mode. Without this, the app loads but looks broken.',
+      critical: true,
+      test: cssVarsSupported
+    },
+    {
+      name: 'Modern layout',
+      why: 'Arranges cards and columns to fit the screen. Without this, the app works but the layout is untidy.',
+      critical: false,
+      test: function () { return cssSupports('display', 'grid'); }
+    },
+    {
+      name: 'Offline install',
+      why: 'Lets the app be pinned as an icon and opened with no internet in the gym. Without this, the app still works, but only with a connection.',
+      critical: false,
+      test: function () { return inObj(navigator, 'serviceWorker'); }
+    }
+  ];
+
+  /* ---- browser identification ---- */
+
+  function versionAfter(token) {
+    var m = ua.match(new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '([0-9.]+)'));
+    return m ? m[1] : '';
+  }
+
+  function identify() {
+    if (/Edg\//.test(ua))            return { name: 'Microsoft Edge', version: versionAfter('Edg/'), ie: false, note: 'The current Microsoft browser.' };
+    if (/Edge\//.test(ua))           return { name: 'Microsoft Edge (older version)', version: versionAfter('Edge/'), ie: false, note: 'The 2015-2020 version of Edge, before it moved to the Chrome engine.' };
+    if (/MSIE |Trident\//.test(ua)) {
+      var v = versionAfter('MSIE ');
+      if (!v && /Trident\/7/.test(ua)) v = '11';
+      else if (!v && /Trident\/6/.test(ua)) v = '10';
+      return { name: 'Internet Explorer', version: v, ie: true, note: 'Retired by Microsoft in June 2022 and no longer receiving security updates.' };
+    }
+    if (/OPR\//.test(ua))            return { name: 'Opera', version: versionAfter('OPR/'), ie: false, note: '' };
+    if (/Firefox\//.test(ua))        return { name: 'Firefox', version: versionAfter('Firefox/'), ie: false, note: '' };
+    if (/Chrome\//.test(ua))         return { name: 'Chrome', version: versionAfter('Chrome/'), ie: false, note: '' };
+    if (/Safari\//.test(ua))         return { name: 'Safari', version: versionAfter('Version/'), ie: false, note: '' };
+    return { name: 'Not recognised', version: '', ie: false, note: 'The full identification line is below.' };
+  }
+
+  function platform() {
+    if (navigator.userAgentData && navigator.userAgentData.platform) return navigator.userAgentData.platform;
+    if (/Windows NT 10/.test(ua))  return 'Windows 10 or 11';
+    if (/Windows NT 6.3/.test(ua)) return 'Windows 8.1';
+    if (/Windows NT 6.2/.test(ua)) return 'Windows 8';
+    if (/Windows NT 6.1/.test(ua)) return 'Windows 7';
+    if (/Android/.test(ua))        return 'Android';
+    if (/iPad|iPhone/.test(ua))    return 'iPadOS or iOS';
+    if (/Mac OS X/.test(ua))       return 'macOS';
+    return navigator.platform || 'Unknown';
+  }
+
+  /* ---- render ---- */
+
+  function lines(pairs) {
+    var html = '<dl>';
+    for (var i = 0; i < pairs.length; i++) {
+      html += '<div class="line"><dt>' + esc(pairs[i][0]) + '</dt><dd>' + esc(pairs[i][1]) + '</dd></div>';
+    }
+    return html + '</dl>';
+  }
+
+  var browser = identify();
+
+  var results = [];
+  var criticalFails = 0;
+  var anyFails = 0;
+  var i;
+
+  for (i = 0; i < CHECKS.length; i++) {
+    var c = CHECKS[i];
+    var ok;
+    try { ok = !!c.test(); } catch (e) { ok = false; }
+    results.push({ name: c.name, why: c.why, ok: ok, critical: c.critical });
+    if (!ok) { anyFails++; if (c.critical) criticalFails++; }
+  }
+
+  /* browser panel */
+  el('browser-readout').innerHTML = lines([
+    ['Browser', browser.name + (browser.version ? ' ' + browser.version : '')],
+    ['Operating system', platform()]
+  ]) + '<div class="line" style="display:block"><dt style="padding:0 0 4px">Full identification line</dt><dd class="ua" style="text-align:left">' + esc(ua) + '</dd></div>';
+
+  /* checks panel */
+  var checksHTML = '';
+  for (i = 0; i < results.length; i++) {
+    var r = results[i];
+    var cls = r.ok ? 'pass' : (r.critical ? 'fail' : 'warn');
+    var word = r.ok ? 'Works' : (r.critical ? 'Missing' : 'Limited');
+    checksHTML += '<div class="check"><div class="check-head">'
+      + '<span class="check-name">' + esc(r.name) + '</span>'
+      + '<span class="chip ' + cls + '">' + word + '</span>'
+      + '</div><p class="check-why">' + esc(r.why) + '</p></div>';
+  }
+  el('checks').innerHTML = checksHTML;
+
+  /* device panel */
+  var touch = (navigator.maxTouchPoints || (inObj(window, 'ontouchstart') ? 1 : 0));
+  el('device-readout').innerHTML = lines([
+    ['Screen size', screen.width + ' x ' + screen.height + ' points'],
+    ['Browser window', window.innerWidth + ' x ' + window.innerHeight + ' points'],
+    ['Pixel density', (window.devicePixelRatio || 1) + 'x'],
+    ['Touch screen', touch ? 'Yes (' + touch + ' finger points)' : 'Not detected'],
+    ['Language', navigator.language || 'Unknown']
+  ]);
+
+  /* verdict */
+  var vEl = el('verdict');
+  var vLabel = el('verdict-label');
+  var vNote = el('verdict-note');
+  var verdictWord, verdictNote, verdictClass;
+
+  if (criticalFails > 0) {
+    verdictClass = 'fail';
+    verdictWord = 'The app will not run on this browser';
+    verdictNote = 'This browser is missing ' + criticalFails + ' thing' + (criticalFails === 1 ? '' : 's')
+      + ' the app cannot work without. The fix is almost always to open the app in a newer browser on the same tablet, not to change the tablet.';
+  } else if (anyFails > 0) {
+    verdictClass = 'warn';
+    verdictWord = 'The app will run, with limits';
+    verdictNote = 'Everything essential works. Some extras are missing &mdash; see the amber rows above. Most likely the app cannot be pinned as an offline icon, so it would need a connection to open.';
+  } else {
+    verdictClass = 'pass';
+    verdictWord = 'The app will run on this tablet';
+    verdictNote = 'Every check passed. The app can be installed as an icon and used with no internet connection in the gym.';
+  }
+
+  vEl.className = 'verdict ' + verdictClass;
+  vLabel.innerHTML = esc(verdictWord);
+  vNote.innerHTML = verdictNote;
+
+  /* plain-text report */
+  var report = [];
+  report.push('LOAD TRACKER - COMPATIBILITY REPORT');
+  report.push('');
+  report.push('VERDICT   : ' + verdictWord);
+  report.push('BROWSER   : ' + browser.name + (browser.version ? ' ' + browser.version : ''));
+  report.push('SYSTEM    : ' + platform());
+  report.push('SCREEN    : ' + screen.width + 'x' + screen.height + ' @ ' + (window.devicePixelRatio || 1) + 'x');
+  report.push('WINDOW    : ' + window.innerWidth + 'x' + window.innerHeight);
+  report.push('TOUCH     : ' + (touch ? touch + ' points' : 'none'));
+  report.push('');
+  for (i = 0; i < results.length; i++) {
+    var pad = results[i].name;
+    while (pad.length < 20) { pad += ' '; }
+    report.push('  ' + (results[i].ok ? '[ok]  ' : '[NO]  ') + pad + (results[i].critical ? ' (essential)' : ' (optional)'));
+  }
+  report.push('');
+  report.push('UA: ' + ua);
+  el('report').innerHTML = esc(report.join('\n'));
+}());
+</script>
+</body>
+</html>

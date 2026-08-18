@@ -1,0 +1,7 @@
+.DS_Store
+
+# The club's own data. Never committed, never published.
+# - drill-library.json   the 43-drill library, imported on the tablet
+# - measured-drills.json the values the intensity grid was validated against
+# - source-data/         the original spreadsheet images
+private/

@@ -9,7 +9,7 @@
  * it lives in IndexedDB on the device.
  */
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = `load-tracker-${VERSION}`;
 
 const SHELL = [
@@ -32,13 +32,36 @@ const SHELL = [
   './icons/icon-512.png',
 ];
 
+/* Where the install result gets written, so offline-check.html can read back
+ * what actually happened rather than us guessing. Stored in the cache itself
+ * because that survives the worker going to sleep. */
+const REPORT_KEY = './__cache-report.json';
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE)
+    caches.open(CACHE).then(async (cache) => {
       // addAll fails the whole install if any single file 404s, so add
-      // individually and tolerate misses.
-      .then((cache) => Promise.all(SHELL.map((url) => cache.add(url).catch(() => null))))
-      .then(() => self.skipWaiting())
+      // individually and record which ones missed. A silent half-install is
+      // what makes "it works online but not offline" so hard to diagnose.
+      const failed = [];
+      await Promise.all(SHELL.map((url) =>
+        cache.add(url).catch((err) => { failed.push({ url, error: String(err && err.message || err) }); })
+      ));
+
+      const report = {
+        version: VERSION,
+        cache: CACHE,
+        at: new Date().toISOString(),
+        expected: SHELL.length,
+        cached: SHELL.length - failed.length,
+        failed,
+      };
+      await cache.put(REPORT_KEY, new Response(JSON.stringify(report), {
+        headers: { 'Content-Type': 'application/json' },
+      }));
+
+      return self.skipWaiting();
+    })
   );
 });
 

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offline check — Load Tracker</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 17px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         margin: 0; padding: 24px; max-width: 720px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #667; margin: 0 0 20px; }
+  .row { display: flex; gap: 12px; align-items: flex-start;
+         padding: 14px 0; border-top: 1px solid #8883; }
+  .dot { flex: none; width: 26px; text-align: center; font-size: 20px; }
+  .what { font-weight: 600; }
+  .detail { color: #667; font-size: 15px; margin-top: 2px;
+            word-break: break-word; }
+  button { font: inherit; min-height: 52px; padding: 0 22px; margin: 6px 8px 6px 0;
+           border: 0; border-radius: 10px; background: #2f6fdb; color: #fff; }
+  button.secondary { background: #6b7280; }
+  #verdict { padding: 16px; border-radius: 10px; margin: 18px 0;
+             font-weight: 600; background: #8882; }
+  ul { margin: 6px 0 0; padding-left: 20px; }
+</style>
+</head>
+<body>
+<h1>Offline check</h1>
+<p class="sub">Is the app really saved on this tablet, or is it still coming from the internet?</p>
+
+<div id="verdict">Checking…</div>
+<div id="rows"></div>
+
+<p>
+  <button id="repair">Save the app to this tablet</button>
+  <button id="recheck" class="secondary">Check again</button>
+</p>
+<p class="sub" style="font-size:15px">
+  After the green result appears, turn the wifi off and open the app. That is the real test.
+</p>
+
+<script>
+/* Deliberately standalone: no modules, no imports. If the app itself is
+   broken this page must still open and still explain why. */
+var rows = document.getElementById('rows');
+var verdict = document.getElementById('verdict');
+
+var SHELL = ['./','./index.html','./manifest.webmanifest','./css/app.css',
+  './js/app.js','./js/db.js','./js/models.js','./js/load.js','./js/ui.js',
+  './js/components.js','./js/views/practice.js','./js/views/drills.js',
+  './js/views/roster.js','./js/views/analysis.js','./js/views/settings.js',
+  './icons/icon-192.png','./icons/icon-512.png'];
+
+function row(ok, what, detail) {
+  var d = document.createElement('div'); d.className = 'row';
+  d.innerHTML = '<div class="dot">' + (ok === true ? '✅' : ok === false ? '❌' : '⚠️') +
+    '</div><div><div class="what"></div><div class="detail"></div></div>';
+  d.querySelector('.what').textContent = what;
+  d.querySelector('.detail').innerHTML = detail || '';
+  rows.appendChild(d);
+  return ok === true;
+}
+
+async function check() {
+  rows.innerHTML = '';
+  verdict.textContent = 'Checking…';
+  var good = true;
+
+  good = row(window.isSecureContext, 'Secure connection',
+    location.protocol + '//' + location.host +
+    (window.isSecureContext ? ' — fine' : ' — offline mode cannot work here')) && good;
+
+  if (!('serviceWorker' in navigator)) {
+    row(false, 'Offline support in this browser', 'Not available. This browser cannot run the app offline.');
+    verdict.textContent = '❌ This browser cannot store the app.';
+    return;
+  }
+
+  var regs = await navigator.serviceWorker.getRegistrations();
+  var mine = regs.filter(function (r) {
+    return (r.scope || '').indexOf(location.pathname.replace(/[^/]*$/, '')) === 0;
+  });
+  var reg = mine[0] || regs[0];
+
+  if (!reg) {
+    good = row(false, 'App saved to this tablet', 'No. Nothing has been stored yet — tap the blue button below.');
+  } else {
+    var w = reg.active || reg.waiting || reg.installing;
+    good = row(!!reg.active, 'App saved to this tablet',
+      reg.active ? 'Yes — active and ready.' : 'Started but not finished (state: ' + (w && w.state) + ').') && good;
+  }
+
+  good = row(!!navigator.serviceWorker.controller, 'This page is being served from the tablet',
+    navigator.serviceWorker.controller
+      ? 'Yes — this very page came from the saved copy, not the internet.'
+      : 'Not yet. Tap "Check again" once after saving; the first visit always comes from the internet.') && good;
+
+  // What is actually in the cupboard?
+  var names = await caches.keys();
+  var mineNames = names.filter(function (n) { return n.indexOf('load-tracker-') === 0; });
+  if (!mineNames.length) {
+    good = row(false, 'Files stored', 'None yet.');
+  } else {
+    var cache = await caches.open(mineNames[mineNames.length - 1]);
+    var missing = [];
+    for (var i = 0; i < SHELL.length; i++) {
+      var hit = await cache.match(new URL(SHELL[i], location.href).href);
+      if (!hit) missing.push(SHELL[i]);
+    }
+    var have = SHELL.length - missing.length;
+    good = row(missing.length === 0, 'Files stored',
+      have + ' of ' + SHELL.length + ' saved' +
+      (missing.length ? '<ul><li>' + missing.join('</li><li>') + '</li></ul>' : ' — nothing missing.')) && good;
+
+    var rep = await cache.match(new URL('./__cache-report.json', location.href).href);
+    if (rep) {
+      var j = await rep.json();
+      row(j.failed.length === 0, 'Last save attempt',
+        j.cached + ' of ' + j.expected + ' saved at ' + new Date(j.at).toLocaleString() +
+        (j.failed.length ? '<ul><li>' + j.failed.map(function (f) {
+          return f.url + ' — ' + f.error; }).join('</li><li>') + '</li></ul>' : ''));
+    }
+  }
+
+  verdict.textContent = good
+    ? '✅ The app is stored on this tablet. Turn the wifi off and open it.'
+    : '⚠️ Not ready for offline use yet. Tap "Save the app to this tablet", wait, then "Check again".';
+}
+
+document.getElementById('repair').onclick = async function () {
+  this.disabled = true; this.textContent = 'Saving…';
+  try {
+    var regs = await navigator.serviceWorker.getRegistrations();
+    for (var i = 0; i < regs.length; i++) await regs[i].unregister();
+    var names = await caches.keys();
+    for (var j = 0; j < names.length; j++) {
+      if (names[j].indexOf('load-tracker-') === 0) await caches.delete(names[j]);
+    }
+    var reg = await navigator.serviceWorker.register('./sw.js');
+    await navigator.serviceWorker.ready;
+    // Give the install a moment to finish writing files.
+    await new Promise(function (r) { setTimeout(r, 2500); });
+  } catch (e) {
+    alert('Could not save: ' + e.message);
+  }
+  this.disabled = false; this.textContent = 'Save the app to this tablet';
+  check();
+};
+
+document.getElementById('recheck').onclick = check;
+check();
+</script>
+</body>
+</html>

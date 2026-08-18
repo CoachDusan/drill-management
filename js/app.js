@@ -87,6 +87,14 @@ async function boot() {
 
   window.addEventListener('hashchange', navigate);
 
+  // Registered before anything that can block or throw. Offline mode is the
+  // whole point on a gym floor with no signal, so it must not depend on the
+  // database opening or the first view rendering successfully.
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    navigator.serviceWorker.register('./sw.js')
+      .catch((err) => { console.error('Service worker did not register:', err); });
+  }
+
   // Ask the browser not to evict our data if storage gets tight.
   if (navigator.storage && navigator.storage.persist) {
     try { await navigator.storage.persist(); } catch (_) { /* best effort */ }
@@ -97,10 +105,6 @@ async function boot() {
   });
 
   await navigate();
-
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('./sw.js').catch(() => { /* offline cache is a bonus, not a requirement */ });
-  }
 }
 
 window.addEventListener('error', (e) => {

@@ -306,6 +306,56 @@ Syntax-check any module the same way: `jsc -m js/whatever.js`. A clean run means
 it parses and its imports resolve. `js/app.js` and `sw.js` will report a missing
 `window` / `self` — that is expected, and means they parsed fine.
 
+## Hosting
+
+Served by GitHub Pages from `main` / root:
+
+    https://coachdusan.github.io/drill-management/
+
+Pages requires the repo to be public, which is the reason `private/` exists at
+all. Source is **Deploy from a branch**, not GitHub Actions — there is no build
+step and nothing to run.
+
+Every path in the app is relative (`./`). It has to stay that way: Pages serves
+this from a *subfolder*, so a single leading `/` would 404 every file on the
+tablet while still working locally.
+
+Two pages exist for checking a device, and they are separate on purpose —
+each answers a different question, and both must keep working if the app
+itself is broken (no modules, no imports):
+
+- `compat.html` — can this browser run the app at all?
+- `offline-check.html` — is the app *genuinely stored* on this device? Lists
+  any file that failed to save, and can wipe and re-save.
+
+`offline-check.html` was written after offline failed on the tablet: the app
+opened online, not with the wifi off. The service worker logic was correct.
+The fault was that it installed *silently* — `cache.add().catch(() => null)`
+tolerated a failed file and still reported success, so a half-empty cache was
+indistinguishable from a working one. The worker now records what it saved and
+what it didn't (`__cache-report.json` inside its own cache), and registration
+moved ahead of the database open and the first render, because offline must not
+depend on either of those succeeding. Bump `VERSION` in `sw.js` to force a
+clean reinstall on the device.
+
+Green checks are not the test. **Wifi off, open from the icon** is the test.
+
+Installing on Windows: open the app URL (not `offline-check.html` — it carries
+no manifest, so Edge will not offer to install it), then `•••` -> Apps ->
+"Install this site as an app".
+
+The app ships with no drills. The library is club data and must be carried to
+the tablet by hand (`private/drill-library.json`, Settings -> Import a drill
+library). An empty Drill library on a fresh device is correct, not a bug.
+
+**Pushing from this Mac does not work.** `~/.gitconfig` had a credential helper
+pointing at a `gh` binary in a since-deleted temp folder, which also blanked the
+Keychain fallback — it broke every repo on the machine, not just this one. The
+stale entries were removed (backup: `~/.gitconfig.backup-20260818`), but the
+Keychain holds no GitHub credential, so command-line pushes still fail. Dusan
+pushes via GitHub Desktop or VS Code. Commit locally and ask; do not burn time
+retrying the push.
+
 ## Build stages
 
 1. **Done** — shell, roster, drill library, backup/restore, offline install.

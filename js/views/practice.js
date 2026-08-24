@@ -11,7 +11,7 @@
 import * as db from '../db.js';
 import {
   makeSession, makeBlock, makeDrill, toDateKey, formatDate, intensityInfo,
-  resolveIntensity, TISSUE, DEFAULT_GROUPS,
+  resolveIntensity, TISSUE, DEFAULT_GROUPS, GAME_DAYS, gameDayInfo,
 } from '../models.js';
 import {
   blockMinutes, blockLoad, sessionTeamLoad, sessionTeamMinutes,
@@ -164,6 +164,16 @@ function sessionRow(s, blocks, rated) {
    Starting a practice
    ====================================================================== */
 
+/** The game-week dropdown. 'Not set' is a real, distinct answer from GD-X:
+ *  GD-X means "nowhere near a game", unset means "I have not said yet". */
+function gameDaySelect(value) {
+  return selectInput(
+    [{ value: '', label: 'Not set' }].concat(
+      GAME_DAYS.map((g) => ({ value: g.value, label: `${g.label} — ${g.note}` }))),
+    value || '',
+  );
+}
+
 async function startPractice() {
   const players = await db.getAll(db.STORES.players);
   const eligible = players.filter((p) => p.status !== 'inactive');
@@ -172,6 +182,7 @@ async function startPractice() {
   const result = await openModal('Start a practice', (body, done) => {
     const date = h('input', { type: 'date', value: toDateKey(new Date()) });
     const type = selectInput(SESSION_TYPES, 'Practice');
+    const gameDay = gameDaySelect(null);
     const label = textInput('', { placeholder: 'Optional — e.g. pre-game shootaround' });
 
     const roster = h('div', { class: 'list' }, eligible.map((p) => {
@@ -205,6 +216,8 @@ async function startPractice() {
 
     body.append(
       h('div', { class: 'form-row' }, [field('Date', date), field('Type', type)]),
+      field('Where is this in the game week?', gameDay,
+        'GD-X is anything more than five days out. Leave it unset if you would rather say later — the analysis will tell you which practices are still missing it.'),
       field('Label', label),
       h('h3', { style: { marginTop: '18px' }, text: 'Who is training today?' }),
       h('p', { class: 'tiny', style: { marginTop: 0 } },
@@ -217,6 +230,7 @@ async function startPractice() {
       done({
         date: date.value || toDateKey(new Date()),
         type: type.value,
+        gameDay: gameDay.value || null,
         label: label.value.trim(),
         rosterIds: [...preselected],
       });
@@ -228,6 +242,7 @@ async function startPractice() {
   const session = makeSession({
     date: result.date,
     type: result.type,
+    gameDay: result.gameDay,
     label: result.label,
     rosterIds: result.rosterIds,
     startedAt: new Date().toISOString(),
@@ -266,6 +281,11 @@ async function renderLive(root, session) {
     h('div', { class: 'page-head' }, [
       h('div', {}, [
         h('h1', { text: session.label || session.type }),
+        h('button', {
+          class: 'btn btn-sm btn-ghost',
+          style: { padding: '2px 8px', minHeight: '28px' },
+          onclick: async () => { await editGameDay(session); await render(rootEl); },
+        }, session.gameDay ? `Game week: ${session.gameDay}` : 'Set game day'),
         h('div', { class: 'sub', style: { margin: 0 },
           text: `${formatDate(session.date)} · ${roster.length} training · started ${clockTime(session.startedAt)}` }),
       ]),
@@ -1133,6 +1153,25 @@ function unratedNote(blocks) {
   ]);
 }
 
+/** Set or correct where a practice sat in the game week, after the fact.
+ *  Also how the sessions recorded before this field existed get labelled. */
+async function editGameDay(session) {
+  const sel = gameDaySelect(session.gameDay);
+  const result = await openModal('Where is this in the game week?', (body, done) => {
+    body.append(
+      h('p', { class: 'tiny', style: { marginTop: 0 } },
+        'This is what groups practices together in the analysis — every GD-1 of the season compared against each other. GD-X means more than five days out, and is left out of those comparisons.'),
+      field('Game day', sel),
+    );
+    return () => done({ gameDay: sel.value || null });
+  }, { confirmLabel: 'Save' });
+
+  if (!result) return;
+  const fresh = await db.get(db.STORES.sessions, session.id);
+  await db.put(db.STORES.sessions, { ...fresh, gameDay: result.gameDay });
+  toast(result.gameDay ? `Marked ${result.gameDay}` : 'Game day cleared');
+}
+
 /** Correct who trained, after the fact. */
 async function editSessionRoster(session) {
   const players = await db.getAll(db.STORES.players);
@@ -1211,6 +1250,13 @@ async function openSessionSummary(session) {
           h('div', { class: 'v', text: String(ordered.length) }),
           h('div', { class: 'n', text: `${roster.length} players` }),
         ]),
+        h('div', { class: 'stat' }, [
+          h('div', { class: 'k', text: 'Game week' }),
+          h('div', { class: 'v', text: session.gameDay || '—' }),
+          h('div', { class: 'n', text: session.gameDay
+            ? (gameDayInfo(session.gameDay) || {}).note || ''
+            : 'not set — this practice is missing from the game-week comparisons' }),
+        ]),
         liveStat(ordered),
       ]),
 
@@ -1278,6 +1324,8 @@ async function openSessionSummary(session) {
 
       h('div', { class: 'btn-row', style: { marginTop: '18px' } }, [
         h('button', { class: 'btn btn-sm', onclick: () => done({ __action: 'rpe' }) }, 'Player ratings'),
+        h('button', { class: 'btn btn-sm', onclick: () => done({ __action: 'gameDay' }) },
+          session.gameDay ? `Game day: ${session.gameDay}` : 'Set game day'),
         h('button', { class: 'btn btn-sm', onclick: () => done({ __action: 'roster' }) }, 'Edit who trained'),
         h('button', { class: 'btn btn-sm btn-danger', onclick: () => done({ __action: 'delete' }) }, 'Delete session'),
       ]),
@@ -1295,6 +1343,12 @@ async function openSessionSummary(session) {
     }
     if (res && res.__action === 'rpe') {
       await collectRPE(session, roster);
+      const again = await db.get(db.STORES.sessions, session.id);
+      if (again) await openSessionSummary(again);
+      return;
+    }
+    if (res && res.__action === 'gameDay') {
+      await editGameDay(session);
       const again = await db.get(db.STORES.sessions, session.id);
       if (again) await openSessionSummary(again);
       return;

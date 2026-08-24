@@ -270,6 +270,44 @@ export function rpeInfo(v) {
  * Settings; stored under the 'groups' meta key. */
 export const DEFAULT_GROUPS = ['Team', 'Bigs', 'Smalls'];
 
+/* ---- where a practice sits in the game week --------------------------
+ *
+ * Set BY HAND when the practice starts, not worked out from a fixture list.
+ * The coach knows what day it is; making the app infer it from recorded games
+ * meant it could only ever label the past, needed a second list of upcoming
+ * fixtures to label the present, and gave two sources of truth for one fact.
+ * One dropdown removes all of that.
+ *
+ * GD-X means "more than five days out". Those practices still count in every
+ * load, drill and weekly total — they are simply left out of the game-week
+ * comparisons, because there is no game week to compare them against.
+ *
+ * null means he has not said. That is NOT the same as GD-X, and the analysis
+ * reports it rather than assuming: same rule as an untimed clock, an untagged
+ * movement profile, an unrated drill and a missing RPE.
+ */
+export const GAME_DAYS = [
+  { value: 'GD',   label: 'GD',   note: 'Game day' },
+  { value: 'GD-1', label: 'GD-1', note: 'Day before the game' },
+  { value: 'GD-2', label: 'GD-2', note: 'Two days out' },
+  { value: 'GD-3', label: 'GD-3', note: 'Three days out' },
+  { value: 'GD-4', label: 'GD-4', note: 'Four days out' },
+  { value: 'GD-5', label: 'GD-5', note: 'Five days out' },
+  { value: 'GD-X', label: 'GD-X', note: 'More than five days out — no game-week analysis' },
+];
+
+/** The order he reads a week in: furthest out first, game day last. */
+export const GAME_DAY_ORDER = ['GD-5', 'GD-4', 'GD-3', 'GD-2', 'GD-1', 'GD'];
+
+/** Does this label belong in the game-week comparisons? GD-X and unset do not. */
+export function isGameWeekDay(value) {
+  return GAME_DAY_ORDER.includes(value);
+}
+
+export function gameDayInfo(value) {
+  return GAME_DAYS.find((g) => g.value === value) || null;
+}
+
 /* ---- drill categories ----------------------------------------------- */
 
 export const DEFAULT_CATEGORIES = [
@@ -342,6 +380,7 @@ export function makeSession(fields = {}) {
     date: toDateKey(now),
     label: '',
     type: 'Practice',        // Practice | Game | Lift | Recovery | Other
+    gameDay: null,           // 'GD' | 'GD-1'..'GD-5' | 'GD-X' | null (not said)
     status: 'live',          // live | complete
     startedAt: now.toISOString(),
     endedAt: null,

@@ -11,7 +11,8 @@
 
 import {
   rangeFor, blocksByDate, dayRollup, dayRollups, loadSeries, windowCoverage,
-  gameDates, gameDayLabel, gameDayBuckets,
+  aggregate, sessionRollups, gameDayCoverage, gameWeekComparison,
+  categoryByGameDay, drillWindowAverages,
   drillRollups, categoryMix, playerDaySeries, playerTotals, comparePeriods,
 } from '../js/history.js';
 import { acwrSeries, provisionalNote } from '../js/load.js';
@@ -83,93 +84,120 @@ const blk = (sessionId, intensity, minutes, extra = {}) => ({
   eq('and counts the unrated runs', cov.unratedRuns, 1);
 }
 
-/* ---- game days --------------------------------------------------------- */
+/* ---- the game week, from the coach's own label -------------------------- */
 
 {
-  // Game on the Saturday (D(5)) and the following Wednesday (D(9)).
   const sessions = [
-    ses('g1', D(5), { type: 'Game' }),
-    ses('g2', D(9), { type: 'Game' }),
-    ses('s1', D(4)),
-  ];
-
-  const games = gameDates(sessions);
-  eq('a game needs no new record — type Game is enough', games.length, 2);
-  eq('games come back sorted', games[0], D(5));
-
-  eq('the day before a game is GD-1', gameDayLabel(D(4), games).label, 'GD-1');
-  eq('two days before is GD-2', gameDayLabel(D(3), games).label, 'GD-2');
-  eq('game day itself is GD', gameDayLabel(D(5), games).label, 'GD');
-  eq('the day after is GD+1', gameDayLabel(D(6), games).label, 'GD+1');
-
-  // D(7) is 2 days after Saturday and 2 days before Wednesday. Preparation
-  // for the next game wins the tie: that is the decision he is making.
-  eq('a tie goes to the game ahead', gameDayLabel(D(7), games).label, 'GD-2');
-
-  ok('a day far from any game gets no label',
-    gameDayLabel(addDays(D(9), 6), games) === null);
-  ok('with no games at all, nothing is labelled',
-    gameDayLabel(D(3), []) === null);
-
-  // Upcoming fixtures merge in, so today can read GD-1 before the game exists.
-  const withFixture = gameDates(sessions, [{ date: D(14) }]);
-  eq('a scheduled fixture counts as a game date', withFixture.length, 3);
-  eq('a fixture on a day already played collapses',
-    gameDates(sessions, [{ date: D(5) }]).length, 2);
-}
-
-/* ---- game-day buckets -------------------------------------------------- */
-
-{
-  // Two full game weeks so GD-1 has two days behind it.
-  const sessions = [
-    ses('a1', D(3)), ses('a2', D(4)),  ses('ga', D(5), { type: 'Game' }),
-    ses('b1', D(10)), ses('b2', D(11)), ses('gb', D(12), { type: 'Game' }),
+    ses('a1', D(3),  { gameDay: 'GD-2', startedAt: '2026-03-05T17:00:00Z', endedAt: '2026-03-05T18:40:00Z' }),
+    ses('a2', D(4),  { gameDay: 'GD-1' }),
+    ses('ga', D(5),  { gameDay: 'GD', type: 'Game' }),
+    ses('b1', D(10), { gameDay: 'GD-2' }),
+    ses('b2', D(11), { gameDay: 'GD-1' }),
+    ses('c1', D(17), { gameDay: 'GD-X' }),        // more than five days out
+    ses('c2', D(18), {}),                          // never labelled
   ];
   const blocks = [
-    blk('a1', 8, 60),                    // GD-2, heavy: 480
-    blk('a2', 4, 30),                    // GD-1, light: 120
-    blk('b1', 8, 50),                    // GD-2: 400
-    blk('b2', 5, 30),                    // GD-1: 150
+    blk('a1', 8, 60, { category: 'Live / scrimmage', liveMs: 30 * 60000 }),
+    blk('a1', 4, 20, { category: 'Defense' }),
+    blk('a2', 4, 30, { category: 'Shooting', liveMs: 12 * 60000 }),
+    blk('b1', 8, 50, { category: 'Live / scrimmage', liveMs: 20 * 60000 }),
+    blk('b2', 5, 30, { category: 'Shooting' }),
+    blk('b2', 3, 10, { category: 'Warm-up' }),
+    blk('c1', 6, 40, { category: 'Conditioning' }),
+    blk('c2', 6, 40, { category: 'Conditioning' }),
   ];
-  const range = { from: D(0), to: D(12) };
-  const days = dayRollups(sessions, blocks, range);
-  const buckets = gameDayBuckets(days, gameDates(sessions));
 
-  const gd1 = buckets.find((b) => b.key === 'GD-1');
-  const gd2 = buckets.find((b) => b.key === 'GD-2');
+  const rollups = sessionRollups(sessions, blocks, []);
+  eq('one row per practice', rollups.length, 7);
+  eq('a practice knows its clocked length', rollups[0].minutes, 80);
+  eq('and its wall clock when it has one', rollups[0].wallMinutes, 100);
+  eq('live density is over the timed drills only', rollups[0].liveDensity, 30 / 60);
+  eq('and carries how much it covers', rollups[0].liveCoverage, 60 / 80);
 
-  eq('GD-1 is built from two days', gd1.n, 2);
-  eq('and averages them', gd1.meanLoad, 135);
-  eq('GD-2 averages its own two', gd2.meanLoad, 440);
-  ok('the day before a game is lighter than two days before', gd1.meanLoad < gd2.meanLoad);
-  eq('the spread is kept, not just the mean', gd1.minLoad, 120);
-  eq('mean drill length is reported per day', gd1.meanDrillMinutes, 30);
+  const cov = gameDayCoverage(rollups);
+  eq('an unlabelled practice is counted, not assumed', cov.unset, 1);
+  eq('GD-X is its own answer, not the same as unset', cov.excluded, 1);
+  eq('and only the game-week ones are compared', cov.compared, 5);
 
-  // Countdown first, then game day, then the days after — the order he reads
-  // a week in. Asserted as a property so the window's edges cannot break it.
-  const order = buckets.map((b) => b.order);
-  ok('buckets read in the order he plans a week',
-    order.every((v, i) => i === 0 || v > order[i - 1]), buckets.map((b) => b.key).join(' '));
-  const at = (k) => buckets.findIndex((b) => b.key === k);
-  ok('GD-1 sits immediately before game day', at('GD') === at('GD-1') + 1);
-  ok('and the days after a game come last', at('GD+1') > at('GD'));
+  const cmp = gameWeekComparison(rollups);
+  eq('only game-week days appear', cmp.length, 3);
+  eq('they read in the order he plans a week', cmp.map((b) => b.key).join(' '), 'GD-2 GD-1 GD');
+  ok('GD-X never appears', !cmp.some((b) => b.key === 'GD-X'));
 
-  // A rest day on GD-1 is a real, deliberate GD-1 and must pull the mean down.
-  const withRest = gameDayBuckets(
-    dayRollups(
-      [...sessions, ses('gc', addDays(D(12), 7), { type: 'Game' })],
-      blocks,
-      { from: D(0), to: addDays(D(12), 7) },
-    ),
-    gameDates([...sessions, ses('gc', addDays(D(12), 7), { type: 'Game' })]),
-  );
-  const gd1b = withRest.find((b) => b.key === 'GD-1');
-  eq('a third GD-1 with no practice still counts as a GD-1', gd1b.n, 3);
-  eq('and drags the average down rather than being dropped', gd1b.meanLoad, 90);
-  eq('the rest day is reported', gd1b.restDays, 1);
-  ok('but it does not distort the average drill length',
-    gd1b.meanDrillMinutes === 30, gd1b.meanDrillMinutes);
+  const gd1 = cmp.find((b) => b.key === 'GD-1');
+  const gd2 = cmp.find((b) => b.key === 'GD-2');
+  eq('GD-1 pools two practices', gd1.n, 2);
+  eq('average practice length', gd1.meanMinutes, 35);      // 30 and 40
+  eq('the spread is kept', gd1.minMinutes, 30);
+  eq('average load', gd1.meanLoad, (120 + 180) / 2);
+  eq('average drills per practice', gd1.meanDrills, 1.5);
+  eq('GD-2 is longer than GD-1', gd2.meanMinutes, 65);
+
+  // Pooled, not the mean of the percentages: a 60-minute drill must not weigh
+  // the same as a 4-minute one.
+  eq('live density is pooled across the bucket', gd2.liveDensity, (30 + 20) / (60 + 50));
+  eq('and reports how much of the time it covers', gd2.liveCoverage, 110 / 130);
+  eq('a bucket with nothing timed says null, not zero', gd1.liveDensity, 12 / 30);
+
+  /* ---- what a game day is made of ---- */
+
+  const made = categoryByGameDay(rollups, 'GD-1');
+  eq('it knows how many practices it averaged', made.sessions, 2);
+  const shooting = made.categories.find((c) => c.category === 'Shooting');
+  const warmup = made.categories.find((c) => c.category === 'Warm-up');
+  eq('shooting appears in both', shooting.sessionsUsedIn, 2);
+  eq('and averages its minutes per practice', shooting.meanMinutes, 30);
+  eq('warm-up appeared in only one', warmup.sessionsUsedIn, 1);
+  // Divided by every GD-1, not just the one that used it: skipping a category
+  // half the time must show up as a lower average.
+  eq('a category skipped half the time averages lower', warmup.meanMinutes, 5);
+  eq('per-run length is separate from per-practice time', warmup.meanRunMinutes, 10);
+  eq('the biggest slice leads', made.categories[0].category, 'Shooting');
+  eq('live density per category', shooting.liveDensity, 12 / 30);
+  eq('with its own coverage', shooting.liveCoverage, 30 / 60);
+
+  ok('asking for a game day with no practices is empty, not an error',
+    categoryByGameDay(rollups, 'GD-5').categories.length === 0);
+}
+
+/* ---- the same drill over three timescales ------------------------------- */
+
+{
+  const today = D(30);
+  const sessions = [
+    ses('s1', D(28)),   // inside the last 7 days
+    ses('s2', D(10)),   // inside the last 28
+    ses('s3', D(0)),    // season only
+  ];
+  const blocks = [
+    blk('s1', 8, 20, { drillId: 'd1', drillName: 'Live 5v5', liveMs: 14 * 60000 }),
+    blk('s2', 8, 30, { drillId: 'd1', drillName: 'Live 5v5' }),
+    blk('s3', 6, 40, { drillId: 'd1', drillName: 'Live 5v5' }),
+  ];
+
+  const w = drillWindowAverages(sessions, blocks, [], today)[0];
+  eq('the week window sees one run', w.windows.week.runs, 1);
+  eq('the month window sees two', w.windows.month.runs, 2);
+  eq('the season sees all three', w.windows.season.runs, 3);
+
+  eq('average length shortens in the recent window', w.windows.week.meanMinutes, 20);
+  eq('and is longer over the season', w.windows.season.meanMinutes, 30);
+  eq('average load per run, this week', w.windows.week.meanLoad, 160);
+  eq('average load per run, all season', w.windows.season.meanLoad, (160 + 240 + 240) / 3);
+
+  eq('live density where it was measured', w.windows.week.liveDensity, 14 / 20);
+  eq('and its coverage over the season', w.windows.season.liveCoverage, 20 / 90);
+
+  // A drill not run recently must show an honest empty week, not last month's
+  // numbers standing in for it.
+  const stale = drillWindowAverages(
+    [ses('s9', D(0))],
+    [blk('s9', 5, 25, { drillId: 'd9', drillName: 'Old drill' })],
+    [], today,
+  )[0];
+  eq('a drill not run this week shows no runs', stale.windows.week.runs, 0);
+  ok('and no average rather than a stale one', stale.windows.week.meanMinutes === null);
+  eq('while the season still has it', stale.windows.season.runs, 1);
 }
 
 /* ---- drills ------------------------------------------------------------ */

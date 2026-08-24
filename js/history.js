@@ -17,7 +17,7 @@
  * roll-up therefore carries its own coverage, and the screen has to say so.
  */
 
-import { TISSUE, toDateKey, addDays } from './models.js';
+import { TISSUE, toDateKey, addDays, GAME_DAY_ORDER, isGameWeekDay } from './models.js';
 import {
   blockMinutes, blockLoad, blockTissue, blockContactMinutes,
   participationOf, blockLiveMinutes,
@@ -166,109 +166,257 @@ export function windowCoverage(days) {
   return { ratedMinutes: rated, totalMinutes: total, unratedRuns: unrated, fraction: total ? rated / total : 1 };
 }
 
-/* ---- game days ---------------------------------------------------------
+/* ---- the game week -----------------------------------------------------
  *
  * The coach plans in days relative to the next game, not in calendar weeks:
- * GD-1 is the day before a game and should look nothing like GD-3. Comparing
- * every GD-1 of the season against each other is the question — "is my day
- * before a game actually staying light, or has it crept up?"
+ * GD-1 should look nothing like GD-3, and the question is whether every GD-1
+ * of the season actually does.
  *
- * Games need no new record. A game is a session with type 'Game', which the
- * app has always been able to store. The only thing missing is a game that
- * has not happened yet, so an upcoming-fixture list is merged in here; a
- * fixture on a date that later has a real Game session simply collapses into
- * the same day.
+ * The label is set BY HAND when the practice starts. An earlier version worked
+ * it out from recorded games plus a list of upcoming fixtures; that could only
+ * ever label the past without the second list, and gave two sources of truth
+ * for one fact the coach already knows. One dropdown replaced all of it.
+ *
+ * GD-X ("more than five days out") is deliberately excluded from these
+ * comparisons — there is no game week to compare it against — but it still
+ * counts in every load, drill and weekly total. An UNSET label is a third
+ * thing again, and is reported rather than assumed.
  */
 
-export const GAME_TYPES = ['Game'];
+/** Sum a set of drill runs once, so everything else can compose from it. */
+export function aggregate(blocks) {
+  let minutes = 0, load = 0, ratedMinutes = 0, liveMinutes = 0, timedMinutes = 0;
+  let timedRuns = 0, unratedRuns = 0, contactMinutes = 0;
 
-/** Every date the squad plays, past (recorded) and future (scheduled). */
-export function gameDates(sessions, fixtures = []) {
-  const set = new Set();
-  for (const s of sessions) if (GAME_TYPES.includes(s.type) && s.date) set.add(s.date);
-  for (const f of fixtures) {
-    const d = typeof f === 'string' ? f : (f && f.date);
-    if (d) set.add(d);
+  for (const b of blocks) {
+    const m = blockMinutes(b);
+    minutes += m;
+    const l = blockLoad(b);
+    if (l === null) unratedRuns += 1;
+    else { load += l; ratedMinutes += m; }
+    contactMinutes += blockContactMinutes(b);
+    const live = blockLiveMinutes(b);
+    if (live !== null) { liveMinutes += live; timedMinutes += m; timedRuns += 1; }
   }
-  return [...set].sort();
+
+  return {
+    runs: blocks.length,
+    minutes, load, ratedMinutes, unratedRuns, contactMinutes,
+    liveMinutes, timedMinutes, timedRuns,
+    // Density over the TIMED drills only, with coverage travelling beside it.
+    // A 70% density measured on two of six drills is not the session's density.
+    liveDensity: timedMinutes ? liveMinutes / timedMinutes : null,
+    liveCoverage: minutes ? timedMinutes / minutes : 0,
+    coverage: minutes ? ratedMinutes / minutes : 1,
+    meanRunMinutes: blocks.length ? minutes / blocks.length : null,
+  };
 }
 
-/**
- * Label one day relative to the nearest game.
- *
- * Countdown wins ties: with a game either side, the day belongs to the
- * preparation for the next one, which is what the coach is deciding about.
- * `maxAfter` is small on purpose — GD+1 is a recovery day and means something,
- * GD+4 is just a Tuesday.
- */
-export function gameDayLabel(date, games, { maxBefore = 7, maxAfter = 2 } = {}) {
-  if (!games.length) return null;
-  if (games.includes(date)) return { key: 'GD', label: 'GD', offset: 0, order: 0 };
-
-  let before = null, after = null;
-  for (const g of games) {
-    if (g < date) before = g;                    // games are sorted; keep the latest
-    else if (after === null) after = g;          // first one ahead
+/** One row per practice: how long it was, what it cost, how live it was. */
+export function sessionRollups(sessions, blocks, drills = []) {
+  const byId = new Map();
+  for (const b of blocks) {
+    if (!byId.has(b.sessionId)) byId.set(b.sessionId, []);
+    byId.get(b.sessionId).push(b);
   }
+  const library = new Map(drills.map((d) => [d.id, d]));
 
-  const toNext = after ? daysBetween(date, after) : null;
-  const sinceLast = before ? daysBetween(before, date) : null;
+  return sessions.map((session) => {
+    const own = byId.get(session.id) || [];
+    const agg = aggregate(own);
 
-  if (toNext !== null && toNext <= maxBefore && (sinceLast === null || toNext <= sinceLast)) {
-    return { key: `GD-${toNext}`, label: `GD-${toNext}`, offset: -toNext, order: -toNext };
-  }
-  if (sinceLast !== null && sinceLast <= maxAfter) {
-    return { key: `GD+${sinceLast}`, label: `GD+${sinceLast}`, offset: sinceLast, order: sinceLast };
-  }
-  return null;   // too far from any game to be about a game
-}
+    // Wall clock is what he would call the length of practice; clocked minutes
+    // are what was actually timed. They differ, and by design: when practice
+    // splits into groups two clocks run at once, so clocked can exceed wall.
+    const wallMinutes = (session.startedAt && session.endedAt)
+      ? Math.max(0, (Date.parse(session.endedAt) - Date.parse(session.startedAt)) / 60000)
+      : null;
 
-function daysBetween(a, b) {
-  return Math.round((Date.parse(`${b}T00:00:00`) - Date.parse(`${a}T00:00:00`)) / 86400000);
-}
-
-/**
- * Group the window's days by their game-day label.
- *
- * Every bucket carries `n` — how many days it is built from — because with
- * two of them a mean is not a mean, and the screen has to say which it is.
- * Rest days are kept: a GD-1 the squad did nothing on is a real, deliberate
- * GD-1, and dropping it would flatter the average.
- */
-export function gameDayBuckets(days, games, opts = {}) {
-  const map = new Map();
-  for (const d of days) {
-    const gd = gameDayLabel(d.date, games, opts);
-    if (!gd) continue;
-    if (!map.has(gd.key)) map.set(gd.key, { key: gd.key, label: gd.label, order: gd.order, days: [] });
-    map.get(gd.key).days.push(d);
-  }
-
-  const out = [...map.values()].map((b) => {
-    const loads = b.days.map((d) => d.load);
-    const drillDays = b.days.filter((d) => d.drillCount > 0);
-    const covered = b.days.reduce((s, d) => s + d.ratedMinutes, 0);
-    const total = b.days.reduce((s, d) => s + d.minutes, 0);
     return {
-      ...b,
-      n: b.days.length,
-      meanLoad: mean(loads),
-      minLoad: loads.length ? Math.min(...loads) : null,
-      maxLoad: loads.length ? Math.max(...loads) : null,
-      sdLoad: sd(loads),
-      meanMinutes: mean(b.days.map((d) => d.minutes)),
-      // Averaged over the days that actually had drills: a rest day has no
-      // average drill length, and counting it as zero would be a lie.
-      meanDrillMinutes: mean(drillDays.map((d) => d.meanDrillMinutes)),
-      meanDrillCount: mean(drillDays.map((d) => d.drillCount)),
-      restDays: b.days.length - drillDays.length,
-      contactMinutes: mean(b.days.map((d) => d.contactMinutes)),
-      coverage: total ? covered / total : 1,
+      session,
+      date: session.date,
+      gameDay: session.gameDay || null,
+      blocks: own,
+      ...agg,
+      wallMinutes,
+      byCategory: categoryBreakdown(own, library),
     };
-  });
+  }).sort((a, b) => a.date.localeCompare(b.date));
+}
 
-  // GD-4, GD-3, GD-2, GD-1, GD, GD+1 — the way he reads a week.
-  return out.sort((a, b) => a.order - b.order);
+function categoryOfBlock(block, library) {
+  if (block.category) return block.category;
+  const d = block.drillId ? library.get(block.drillId) : null;
+  return (d && d.category) ? d.category : 'Not in the library';
+}
+
+function categoryBreakdown(blocks, library) {
+  const map = new Map();
+  for (const b of blocks) {
+    const key = categoryOfBlock(b, library);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(b);
+  }
+  return [...map.entries()].map(([category, list]) => ({ category, ...aggregate(list) }));
+}
+
+/** How many practices still have no game-week label. */
+export function gameDayCoverage(rollups) {
+  const unset = rollups.filter((r) => !r.gameDay);
+  const excluded = rollups.filter((r) => r.gameDay === 'GD-X');
+  return {
+    total: rollups.length,
+    unset: unset.length,
+    excluded: excluded.length,
+    compared: rollups.filter((r) => isGameWeekDay(r.gameDay)).length,
+    unsetSessions: unset,
+  };
+}
+
+/**
+ * Every GD-1 of the season next to every GD-2, and so on.
+ *
+ * Averaged per PRACTICE, not per day: two sessions on one day are two
+ * practices. Each bucket carries `n`, because with two of them a mean is not
+ * a mean and the screen has to say which it is.
+ */
+export function gameWeekComparison(rollups) {
+  const map = new Map();
+  for (const r of rollups) {
+    if (!isGameWeekDay(r.gameDay)) continue;
+    if (!map.has(r.gameDay)) map.set(r.gameDay, []);
+    map.get(r.gameDay).push(r);
+  }
+
+  return GAME_DAY_ORDER
+    .filter((key) => map.has(key))
+    .map((key) => {
+      const rows = map.get(key);
+      const liveMinutes = rows.reduce((s, r) => s + r.liveMinutes, 0);
+      const timedMinutes = rows.reduce((s, r) => s + r.timedMinutes, 0);
+      const totalMinutes = rows.reduce((s, r) => s + r.minutes, 0);
+      const loads = rows.map((r) => r.load);
+      return {
+        key,
+        label: key,
+        n: rows.length,
+        sessions: rows,
+        meanMinutes: mean(rows.map((r) => r.minutes)),
+        sdMinutes: sd(rows.map((r) => r.minutes)),
+        minMinutes: rows.length ? Math.min(...rows.map((r) => r.minutes)) : null,
+        maxMinutes: rows.length ? Math.max(...rows.map((r) => r.minutes)) : null,
+        meanWallMinutes: mean(rows.map((r) => r.wallMinutes)),
+        meanLoad: mean(loads),
+        minLoad: loads.length ? Math.min(...loads) : null,
+        maxLoad: loads.length ? Math.max(...loads) : null,
+        meanDrills: mean(rows.map((r) => r.runs)),
+        meanRunMinutes: mean(rows.map((r) => r.meanRunMinutes)),
+        // Pooled across the bucket rather than averaging the per-session
+        // percentages: a 40-minute session should not weigh the same as a
+        // 4-minute one.
+        liveDensity: timedMinutes ? liveMinutes / timedMinutes : null,
+        liveCoverage: totalMinutes ? timedMinutes / totalMinutes : 0,
+        coverage: totalMinutes
+          ? rows.reduce((s, r) => s + r.ratedMinutes, 0) / totalMinutes : 1,
+      };
+    });
+}
+
+/**
+ * Inside one game day, where the time actually goes — by drill category.
+ *
+ * "On a GD-1 I average 22 minutes of shooting at 61% live" is the sentence
+ * this exists to produce. Minutes are per practice; density is pooled.
+ */
+export function categoryByGameDay(rollups, gameDay) {
+  const rows = rollups.filter((r) => r.gameDay === gameDay);
+  if (!rows.length) return { gameDay, sessions: 0, categories: [] };
+
+  const map = new Map();
+  for (const r of rows) {
+    for (const c of r.byCategory) {
+      if (!map.has(c.category)) map.set(c.category, []);
+      map.get(c.category).push(c);
+    }
+  }
+
+  const totalMinutes = rows.reduce((s, r) => s + r.minutes, 0);
+  const categories = [...map.entries()].map(([category, list]) => {
+    const minutes = list.reduce((s, c) => s + c.minutes, 0);
+    const liveMinutes = list.reduce((s, c) => s + c.liveMinutes, 0);
+    const timedMinutes = list.reduce((s, c) => s + c.timedMinutes, 0);
+    const runs = list.reduce((s, c) => s + c.runs, 0);
+    return {
+      category,
+      // Divided by every session in the bucket, not just the ones that used
+      // this category: a category skipped on two GD-1s out of three averages
+      // lower, which is the honest answer to "how much do I do of this".
+      meanMinutes: minutes / rows.length,
+      meanRuns: runs / rows.length,
+      meanRunMinutes: runs ? minutes / runs : null,
+      meanLoad: list.reduce((s, c) => s + c.load, 0) / rows.length,
+      minutes,
+      runs,
+      sessionsUsedIn: list.length,
+      liveDensity: timedMinutes ? liveMinutes / timedMinutes : null,
+      liveCoverage: minutes ? timedMinutes / minutes : 0,
+      share: totalMinutes ? minutes / totalMinutes : 0,
+    };
+  }).sort((a, b) => b.meanMinutes - a.meanMinutes);
+
+  return { gameDay, sessions: rows.length, categories, totalMinutes };
+}
+
+/* ---- the same drill over different timescales ---------------------------
+ *
+ * "Is this drill drifting?" A drill that ran 12 minutes in October and runs
+ * 20 now is a different drill, and the season average hides it. Week, month
+ * and season are shown side by side rather than behind a selector, because
+ * the comparison IS the point.
+ */
+export const DRILL_WINDOWS = [
+  { key: 'week',   label: 'Last 7 days',  days: 7 },
+  { key: 'month',  label: 'Last 28 days', days: 28 },
+  { key: 'season', label: 'All season',   days: null },
+];
+
+export function drillWindowAverages(sessions, blocks, drills = [], today = toDateKey(new Date())) {
+  const dateOf = new Map(sessions.map((s) => [s.id, s.date]));
+  const library = new Map(drills.map((d) => [d.id, d]));
+  const groups = new Map();
+
+  for (const b of blocks) {
+    const date = dateOf.get(b.sessionId);
+    if (!date) continue;
+    const key = b.drillId || `name:${String(b.drillName || '').trim().toLowerCase()}`;
+    if (!groups.has(key)) groups.set(key, { key, drillId: b.drillId || null, name: b.drillName || 'Unnamed drill', runs: [] });
+    const g = groups.get(key);
+    g.runs.push({ block: b, date });
+    if (date >= (g.lastDate || '')) { g.lastDate = date; g.name = b.drillName || g.name; }
+  }
+
+  return [...groups.values()].map((g) => {
+    const windows = {};
+    for (const w of DRILL_WINDOWS) {
+      const from = w.days === null ? null : addDays(today, -(w.days - 1));
+      const inWindow = g.runs.filter((r) => from === null || (r.date >= from && r.date <= today));
+      const agg = aggregate(inWindow.map((r) => r.block));
+      windows[w.key] = {
+        ...agg,
+        meanLoad: agg.runs ? agg.load / agg.runs : null,
+        meanMinutes: agg.runs ? agg.minutes / agg.runs : null,
+      };
+    }
+    return {
+      key: g.key,
+      drillId: g.drillId,
+      name: g.name,
+      category: categoryOfBlock(g.runs[g.runs.length - 1].block, library),
+      lastDate: g.lastDate,
+      runs: g.runs,
+      windows,
+    };
+  }).sort((a, b) => b.windows.season.load - a.windows.season.load);
 }
 
 function mean(arr) {

@@ -287,33 +287,58 @@ two days out from a game should look like. A list of sessions answers neither
 question. The week/player/ACWR material from the original stage-4 scope is
 still there, underneath, rather than first.
 
-**Game-day analysis (GD-1, GD-2 …) is the panel he asked for.** A week is not
-Monday to Sunday, it is a countdown to the next game, and the question is
-whether every GD-1 of the season actually looks like a GD-1.
+**The game-week label is set by hand, not derived.** The first version worked
+GD-1 / GD-2 out from recorded games plus a list of upcoming fixtures. The coach
+replaced it: a dropdown on Start a practice, options GD, GD-1 … GD-5, GD-X.
 
-Games needed **no new field** — `SESSION_TYPES` has always included `Game`, so
-a played game is already recordable and already counted. That is the fifth time
-the answer has been "already recorded, not displayed". Keep checking first.
+He was right, and the reason is worth keeping. Deriving it could only ever
+label the *past* — labelling today needed a second list of fixtures nobody
+would maintain — and it created two sources of truth for a fact he already
+knows before he walks into the gym. One dropdown removed the fixtures list, the
+derivation, and the ambiguity together.
 
-The one genuine gap was a game that has *not happened yet*: today cannot read
-GD-1 unless the app knows about tomorrow's fixture. Hence a small upcoming-games
-list, stored under the `fixtures` meta key and edited from a button on the panel
-itself rather than from Settings, because that is where it is read. Fixtures in
-the past are dropped on save — by then the game is a session.
+Three distinct answers, and they must stay distinct:
+- **GD … GD-5** — in the game week, and compared.
+- **GD-X** — more than five days out. Explicitly excluded from the game-week
+  comparisons at his request, because there is no game week to compare it
+  against. It still counts in every load, drill and weekly total.
+- **unset** — he has not said. NOT the same as GD-X. `gameDayCoverage()`
+  reports it and the panel says how many practices are missing from the
+  averages. Sixth place this rule now appears, after untimed clocks, untagged
+  movement, unrated drills and missing RPE.
 
-Rules in `gameDayLabel()`, all of them decisions rather than defaults:
-- **A tie goes to the game ahead.** With games either side, the day belongs to
-  the preparation for the next one, which is what he is deciding about.
-- **`maxAfter` is 2, `maxBefore` is 7.** GD+1 is a recovery day and means
-  something; GD+4 is just a Tuesday.
-- **Rest days stay in the bucket.** A GD-1 the squad did nothing on is a real,
-  deliberate GD-1. Dropping it would flatter the average — a test asserts this
-  and catches its removal.
-- **Average drill length is per RUN, not per session**, and says so on screen:
-  when practice splits into groups two clocks run at once, so a day's drill
-  minutes can exceed the length of the practice.
-- **Every bucket carries `n`.** Below three days it is labelled as too few to
-  read. Two practices is not a pattern.
+Editable after the fact from the session summary and from the live practice
+header, which is also how the practices recorded before the field existed get
+labelled. No migration: the field is simply absent on older sessions and reads
+as unset.
+
+**What the game-week analysis answers**, in the order he asked for it:
+
+1. **Every GD-1 against every other GD-1** — `gameWeekComparison()`. Average
+   practice length, the range behind that average, average load, average live
+   density, drills per practice, and `n`. Averaged **per practice**, not per
+   day: two sessions on one day are two practices.
+2. **What a game day is made of** — `categoryByGameDay()`. For a chosen GD, the
+   average minutes and live density of each drill category. Minutes are divided
+   by **every practice in the bucket**, not just the ones that used the
+   category: a category skipped on two GD-1s out of four averages half, which
+   is the honest answer to "how much of this do I actually do". A test asserts
+   this and catches the other divisor.
+3. **The same drill over three timescales** — `drillWindowAverages()`. Week,
+   month and season side by side rather than behind a selector, because the
+   comparison is the point: a drill that ran 12 minutes in October and runs 20
+   now is a different drill, and the season average hides it. A drill not run
+   in a window shows an empty row, never last month's figures standing in.
+
+**Live density is pooled, never averaged across sessions.** Averaging the
+per-session percentages would let a 4-minute drill weigh the same as a
+40-minute one. Coverage travels beside every density figure, as always — a
+bucket's density covers only the drills he ran the second stopwatch on.
+
+**Practice length is clocked drill time, not wall clock.** It is the sum of the
+stopwatches, and when practice splits into groups two clocks run at once, so it
+can exceed how long he was in the gym. Wall clock is recorded alongside where
+`startedAt`/`endedAt` allow, and the screen says which is which.
 
 **A game day shows 0 AU, and that had to be said out loud.** Nobody runs a
 stopwatch on a game, so the app genuinely does not know what one cost — almost

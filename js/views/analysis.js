@@ -19,7 +19,7 @@
 
 import * as db from '../db.js';
 import { h, mount, emptyState, openModal } from '../ui.js';
-import { TISSUE, formatDate, toDateKey, addDays } from '../models.js';
+import { TISSUE, formatDate, GAME_DAY_ORDER } from '../models.js';
 import {
   fmtLoad, fmtMinutes, fmtRatio, fmtDensity,
   acwrSeries, monotonySeries, acwrFlag, monotonyFlag, provisionalNote,
@@ -29,16 +29,16 @@ import * as hist from '../history.js';
 
 let rootEl = null;
 let rangeKey = '4w';        // survives a re-render, resets when the app reloads
+let selectedGD = 'GD-1';    // which game day the category breakdown is showing
 
 export async function render(root) {
   rootEl = root;
 
-  const [sessions, blocks, players, drills, fixtures] = await Promise.all([
+  const [sessions, blocks, players, drills] = await Promise.all([
     db.getAll(db.STORES.sessions),
     db.getAll(db.STORES.blocks),
     db.getAll(db.STORES.players),
     db.getAll(db.STORES.drills),
-    db.getMeta('fixtures', []),
   ]);
 
   const head = h('div', { class: 'page-head' }, [
@@ -65,19 +65,27 @@ export async function render(root) {
 
   const range = hist.rangeFor(sessions, rangeKey);
   const days = seasonDays.filter((d) => d.date >= range.from && d.date <= range.to);
-  const games = hist.gameDates(sessions, fixtures);
 
   const windowBlocks = days.flatMap((d) => d.blocks);
   const windowSessions = sessions.filter((s) => s.date >= range.from && s.date <= range.to);
   const rolls = hist.drillRollups(windowSessions, windowBlocks, drills);
   const cov = hist.windowCoverage(days);
+  const rollups = hist.sessionRollups(windowSessions, windowBlocks, drills);
+
+  /* Week / month / season averages are computed over EVERYTHING, not over the
+     visible window: the whole point is checking a drill's recent behaviour
+     against its own longer history, so the window must not clip it. */
+  const winByKey = new Map(
+    hist.drillWindowAverages(sessions, blocks, drills).map((w) => [w.key, w.windows]));
+  rolls.forEach((r) => { r.windows = winByKey.get(r.key) || null; });
 
   mount(root,
     head,
     rangeBar(),
     weekPanel(days, acwr, monotony, cov),
     coverageNote(cov),
-    gameDayPanel(days, games, sessions, fixtures),
+    gameWeekPanel(rollups),
+    categoryByGameDayPanel(rollups),
     categoryPanel(rolls),
     drillPanel(rolls),
     squadPanel(windowSessions, windowBlocks, players, range, days),
@@ -232,172 +240,217 @@ function coverageNote(cov) {
   ]);
 }
 
-/* ---- 2. game days -------------------------------------------------------
+/* ---- 2. the game week ---------------------------------------------------
  *
- * The panel the coach asked for. A week is not Monday to Sunday, it is a
- * countdown to the next game, and the question is whether every GD-1 of the
- * season actually looks like a GD-1.
+ * Three questions, in the order he asked them:
+ *   how long is a GD-1, compared to every other GD-1?   (the comparison table)
+ *   where does that time go?                            (categories, below)
+ *   and is any of it drifting?                          (the drill windows)
+ *
+ * The label is his, set when the practice starts. An earlier version derived
+ * it from recorded games plus a list of upcoming fixtures; that could only
+ * label the past without the second list, and gave two sources of truth for
+ * one fact he already knows.
  */
 
-function gameDayPanel(days, games, sessions, fixtures) {
+function gameWeekPanel(rollups) {
   const wrap = h('div', { style: { marginTop: '22px' } });
-  wrap.append(h('div', { class: 'card-head' }, [
-    h('h3', { style: { margin: 0 }, text: 'Days around a game' }),
-    h('button', { class: 'btn btn-sm', onclick: () => editFixtures(fixtures) }, 'Upcoming games'),
-  ]));
+  wrap.append(h('h3', { text: 'The game week' }));
 
-  if (!games.length) {
-    wrap.append(h('div', { class: 'note' }, [
-      h('div', {}, [
-        h('strong', { text: 'No games recorded yet. ' }),
-        'Record a game the same way you record a practice — Start a practice, and set Type to Game. It needs no drills. Once there is one, every training day gets labelled by how far it sits from the next game, and you can compare every GD-1 of the season against each other.',
-      ]),
-      h('div', { class: 'tiny', style: { marginTop: '6px' } },
-        'For a game that has not happened yet, add it under Upcoming games and today will start reading GD-1, GD-2 and so on.'),
-    ]));
-    return wrap;
-  }
+  const cov = hist.gameDayCoverage(rollups);
+  const buckets = hist.gameWeekComparison(rollups);
 
-  const buckets = hist.gameDayBuckets(days, games);
   if (!buckets.length) {
-    wrap.append(h('div', { class: 'note' },
-      'No day in this window sits within a week of a game. Widen the range, or add your upcoming fixtures.'));
+    wrap.append(h('div', { class: 'note' }, [
+      h('strong', { text: 'No practice in this window is marked with a game day yet. ' }),
+      'Set it when you start a practice, or open a finished one and tap Set game day. Once two practices share a label, every GD-1 of the season can be compared against each other.',
+    ]));
+    if (cov.unset) {
+      wrap.append(h('p', { class: 'tiny', style: { marginTop: '8px' } },
+        `${cov.unset} practice${cov.unset === 1 ? '' : 's'} in this window ${cov.unset === 1 ? 'is' : 'are'} waiting for one.`));
+    }
     return wrap;
   }
 
-  const todayLabel = hist.gameDayLabel(toDateKey(new Date()), games);
-  const max = Math.max(1, ...buckets.map((b) => b.meanLoad || 0));
+  const maxMin = Math.max(1, ...buckets.map((b) => b.meanMinutes || 0));
 
   wrap.append(h('p', { class: 'tiny', style: { marginTop: 0 } },
-    todayLabel
-      ? `Today is ${todayLabel.label}. Averages below are for every ${'day'} in this window at each point in the countdown.`
-      : 'Averages are for every day in this window at each point in the countdown to a game.'));
+    'Averaged per practice. GD-X is left out on purpose — there is no game week to compare it against.'));
 
   wrap.append(h('div', { class: 'table-wrap' }, [
     h('table', {}, [
       h('thead', {}, h('tr', {}, [
         h('th', { text: 'Day' }),
-        h('th', { text: 'Average load' }),
-        h('th', { class: 'num', text: 'AU' }),
+        h('th', { text: 'Average length' }),
+        h('th', { class: 'num', text: 'Min' }),
         h('th', { class: 'num', text: 'Range' }),
-        h('th', { class: 'num', text: 'Avg drill' }),
+        h('th', { class: 'num', text: 'Live' }),
+        h('th', { class: 'num', text: 'AU' }),
         h('th', { class: 'num', text: 'Drills' }),
-        h('th', { class: 'num', text: 'Days' }),
+        h('th', { class: 'num', text: 'Sessions' }),
       ])),
-      h('tbody', {}, buckets.map((b) => {
-        const isToday = todayLabel && todayLabel.key === b.key;
-        return h('tr', { style: isToday ? { background: 'var(--accent-soft)' } : {} }, [
-          h('td', {}, [
-            h('strong', { text: b.label }),
-            isToday ? h('div', { class: 'tiny', text: 'today' }) : null,
-            b.restDays ? h('div', { class: 'tiny', text: `${b.restDays} with no practice` }) : null,
+      h('tbody', {}, buckets.map((b) => h('tr', {
+        class: 'clickable',
+        title: `Every ${b.label} in this window`,
+        onclick: () => openGameDay(b),
+      }, [
+        h('td', {}, [h('strong', { text: b.label })]),
+        h('td', {}, [
+          h('div', { class: 'meter' }, [
+            h('div', { class: `meter-fill${b.key === 'GD' ? ' game' : ''}`, style: { width: `${((b.meanMinutes || 0) / maxMin) * 100}%` } }),
           ]),
-          h('td', {}, [
-            h('div', { class: 'meter' }, [
-              h('div', { class: `meter-fill${b.key === 'GD' ? ' game' : ''}`, style: { width: `${((b.meanLoad || 0) / max) * 100}%` } }),
-            ]),
-          ]),
-          h('td', { class: 'num', text: fmtLoad(b.meanLoad) }),
-          h('td', { class: 'num tiny', text: b.n > 1 ? `${fmtLoad(b.minLoad)}–${fmtLoad(b.maxLoad)}` : '—' }),
-          h('td', { class: 'num', text: b.meanDrillMinutes == null ? '—' : fmtMinutes(b.meanDrillMinutes) }),
-          h('td', { class: 'num', text: b.meanDrillCount == null ? '—' : b.meanDrillCount.toFixed(1) }),
-          h('td', { class: 'num' }, [
-            String(b.n),
-            b.n < 3 ? h('div', { class: 'tiny', text: 'few' }) : null,
-          ]),
-        ]);
-      })),
+        ]),
+        h('td', { class: 'num', text: b.meanMinutes == null ? '—' : String(Math.round(b.meanMinutes)) }),
+        h('td', { class: 'num tiny', text: b.n > 1 ? `${Math.round(b.minMinutes)}–${Math.round(b.maxMinutes)}` : '—' }),
+        h('td', { class: 'num' }, [
+          fmtDensity(b.liveDensity),
+          b.liveDensity != null && b.liveCoverage < 0.999
+            ? h('div', { class: 'tiny', text: `of ${Math.round(b.liveCoverage * 100)}%` })
+            : null,
+        ]),
+        h('td', { class: 'num', text: fmtLoad(b.meanLoad) }),
+        h('td', { class: 'num', text: b.meanDrills == null ? '—' : b.meanDrills.toFixed(1) }),
+        h('td', { class: 'num' }, [
+          String(b.n),
+          b.n < 3 ? h('div', { class: 'tiny', text: 'few' }) : null,
+        ]),
+      ]))),
     ]),
   ]));
 
-  /* A game day with no clocked drills reads as 0 AU, and 0 AU next to a
-     384 AU Monday says games are free. They are the heaviest day of the week.
-     The app genuinely does not know what a game cost — nobody runs a stopwatch
-     on a game — so it has to say that rather than let the row speak. */
-  const gdRow = buckets.find((b) => b.key === 'GD');
-  if (gdRow && gdRow.n && (gdRow.meanLoad || 0) < 1) {
+  /* A GD row with nothing clocked reads as 0 AU, and 0 next to a 384 AU GD-3
+     says games are free. They are the heaviest day of the week. Nobody runs a
+     stopwatch on a game, so the app genuinely does not know what one cost and
+     has to say so rather than let the row speak. */
+  const gdRow = buckets.find((b) => b.key === 'GD' && (b.meanLoad || 0) < 1);
+  if (gdRow) {
     wrap.append(h('div', { class: 'note warn', style: { marginTop: '10px' } }, [
-      h('strong', { text: 'Game day shows 0 AU because nothing was clocked in it. ' }),
-      'That is not what a game costs — it is almost certainly the heaviest day of the week. Everything on this screen counts training only, so weekly totals, monotony and the acute:chronic ratio are all missing the games. Compare training against training, not against the zero.',
+      h('strong', { text: 'Game day shows 0 because nothing was clocked in it. ' }),
+      'That is not what a game costs — it is almost certainly the heaviest day of the week. Everything on this screen counts training only, so weekly totals, monotony and the acute:chronic ratio all exclude games. Compare training against training, not against the zero.',
     ]));
   }
 
   const thin = buckets.filter((b) => b.n < 3);
   if (thin.length) {
     wrap.append(h('div', { class: 'note', style: { marginTop: '10px' } }, [
-      h('strong', { text: `${thin.map((b) => b.label).join(', ')} ${thin.length === 1 ? 'is' : 'are'} built on fewer than three days. ` }),
-      'That is one or two practices, not a pattern. The column is there so you can watch it fill up, not so you can read it yet.',
+      h('strong', { text: `${thin.map((b) => b.label).join(', ')} ${thin.length === 1 ? 'is' : 'are'} built on fewer than three practices. ` }),
+      'That is not a pattern yet. The row is there so you can watch it fill up.',
     ]));
   }
 
+  if (cov.unset) {
+    wrap.append(h('div', { class: 'note warn', style: { marginTop: '10px' } }, [
+      h('strong', { text: `${cov.unset} practice${cov.unset === 1 ? '' : 's'} in this window ${cov.unset === 1 ? 'has' : 'have'} no game day set. ` }),
+      'They are missing from every row above, so these averages are drawn on part of the picture. Open a practice and tap Set game day to include it.',
+    ]));
+  }
+
+  if (cov.excluded) {
+    wrap.append(h('p', { class: 'tiny', style: { marginTop: '8px' } },
+      `${cov.excluded} practice${cov.excluded === 1 ? '' : 's'} marked GD-X ${cov.excluded === 1 ? 'is' : 'are'} left out of this table, as you asked. They still count everywhere else on this screen.`));
+  }
+
   wrap.append(h('p', { class: 'tiny', style: { marginTop: '8px' } },
-    'Average drill is the mean length of one drill run that day, not the length of the session — when practice splits into groups, two clocks run at once. Days with no practice are counted as a zero, because a rest day before a game is a decision, not a gap.'));
+    'Length is clocked drill time — the total of the stopwatches, not wall clock. When practice splits into groups two clocks run at once, so it can exceed how long you were in the gym. Live % is pooled across the practices and covers only the drills you timed.'));
 
   return wrap;
 }
 
-/** Games that have not happened yet, so today can be labelled in advance. */
-async function editFixtures(current) {
-  const list = (current || []).map((f) => (typeof f === 'string' ? { date: f, label: '' } : f))
-    .filter((f) => f && f.date)
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  const result = await openModal('Upcoming games', (body, done) => {
-    const rows = h('div', { class: 'list' });
-
-    function paint() {
-      rows.innerHTML = '';
-      if (!list.length) {
-        rows.appendChild(h('p', { class: 'tiny', text: 'Nothing scheduled. Add a date and today starts counting down to it.' }));
-      }
-      list.forEach((f, i) => {
-        rows.appendChild(h('div', { class: 'row' }, [
-          h('div', { class: 'grow' }, [
-            h('div', { class: 'name', text: formatDate(f.date) }),
-            f.label ? h('div', { class: 'tiny', text: f.label }) : null,
-          ]),
-          h('button', {
-            class: 'btn btn-sm btn-danger',
-            onclick: () => { list.splice(i, 1); paint(); },
-          }, 'Remove'),
-        ]));
-      });
-    }
-    paint();
-
-    const date = h('input', { type: 'date', value: addDays(toDateKey(new Date()), 1) });
-    const label = h('input', { type: 'text', placeholder: 'Optional — e.g. away at Partizan' });
-
+/** Every practice behind one game-day row. */
+function openGameDay(bucket) {
+  return openModal(`Every ${bucket.label}`, (body) => {
     body.append(
-      h('p', { class: 'tiny', style: { marginTop: 0 } },
-        'A game you have already played does not belong here — record it as a session with Type set to Game, and it counts automatically. This list is only so the app knows what is coming, and can tell you that today is GD-2.'),
-      rows,
-      h('div', { class: 'form-row', style: { marginTop: '14px' } }, [
-        h('label', { class: 'field' }, [h('span', { class: 'lbl', text: 'Date' }), date]),
-        h('label', { class: 'field' }, [h('span', { class: 'lbl', text: 'Opponent' }), label]),
+      h('div', { class: 'grid three', style: { marginBottom: '14px' } }, [
+        h('div', { class: 'stat' }, [
+          h('div', { class: 'k', text: 'Average length' }),
+          h('div', { class: 'v', text: bucket.meanMinutes == null ? '—' : String(Math.round(bucket.meanMinutes)) }),
+          h('div', { class: 'n', text: bucket.sdMinutes == null ? `from ${bucket.n} practice${bucket.n === 1 ? '' : 's'}` : `minutes, give or take ${Math.round(bucket.sdMinutes)}` }),
+        ]),
+        h('div', { class: 'stat' }, [
+          h('div', { class: 'k', text: 'Average load' }),
+          h('div', { class: 'v' }, [fmtLoad(bucket.meanLoad), h('span', { class: 'u', text: 'AU' })]),
+          h('div', { class: 'n', text: bucket.n > 1 ? `${fmtLoad(bucket.minLoad)}–${fmtLoad(bucket.maxLoad)} across them` : 'one practice so far' }),
+        ]),
+        h('div', { class: 'stat' }, [
+          h('div', { class: 'k', text: 'Live' }),
+          h('div', { class: 'v', text: fmtDensity(bucket.liveDensity) }),
+          h('div', { class: 'n', text: bucket.liveDensity == null ? 'nothing timed yet' : `measured over ${Math.round(bucket.liveCoverage * 100)}% of the time` }),
+        ]),
       ]),
-      h('button', {
-        class: 'btn btn-sm',
-        onclick: () => {
-          if (!date.value) return;
-          if (!list.some((f) => f.date === date.value)) {
-            list.push({ date: date.value, label: label.value.trim() });
-            list.sort((a, b) => a.date.localeCompare(b.date));
-          }
-          label.value = '';
-          paint();
-        },
-      }, 'Add this game'),
+      h('div', { class: 'table-wrap' }, [
+        h('table', {}, [
+          h('thead', {}, h('tr', {}, [
+            h('th', { text: 'Date' }), h('th', { text: 'Practice' }),
+            h('th', { class: 'num', text: 'Min' }), h('th', { class: 'num', text: 'Drills' }),
+            h('th', { class: 'num', text: 'Live' }), h('th', { class: 'num', text: 'AU' }),
+          ])),
+          h('tbody', {}, bucket.sessions.map((r) => h('tr', {}, [
+            h('td', { text: formatDate(r.date) }),
+            h('td', { class: 'tiny', text: r.session.label || r.session.type }),
+            h('td', { class: 'num', text: String(Math.round(r.minutes)) }),
+            h('td', { class: 'num', text: String(r.runs) }),
+            h('td', { class: 'num', text: fmtDensity(r.liveDensity) }),
+            h('td', { class: 'num', text: fmtLoad(r.load) }),
+          ]))),
+        ]),
+      ]),
     );
+    return null;
+  }, { cancelLabel: 'Close', wide: true });
+}
 
-    return () => done({ fixtures: list });
-  }, { confirmLabel: 'Save' });
+/* ---- 2b. what a game day is made of ------------------------------------- */
 
-  if (!result) return;
-  // Yesterday's fixtures are noise; a played game is a session by then.
-  const today = toDateKey(new Date());
-  await db.setMeta('fixtures', result.fixtures.filter((f) => f.date >= today));
-  await render(rootEl);
+function categoryByGameDayPanel(rollups) {
+  const available = GAME_DAY_ORDER.filter((k) => rollups.some((r) => r.gameDay === k));
+  if (!available.length) return null;
+  if (!available.includes(selectedGD)) selectedGD = available[available.length - 1];
+
+  const data = hist.categoryByGameDay(rollups, selectedGD);
+  const maxMin = Math.max(1, ...data.categories.map((c) => c.meanMinutes));
+
+  return h('div', { style: { marginTop: '22px' } }, [
+    h('h3', { text: 'What a game day is made of' }),
+    h('div', { class: 'util' }, available.map((k) => h('button', {
+      class: k === selectedGD ? 'btn btn-sm btn-primary' : 'btn btn-sm',
+      onclick: () => { selectedGD = k; render(rootEl); },
+    }, k))),
+    h('p', { class: 'tiny', style: { marginTop: 0 } },
+      `Averaged across ${data.sessions} ${selectedGD} practice${data.sessions === 1 ? '' : 's'}. Minutes are per practice — a category you skip on some of them averages lower, which is the honest answer to "how much of this do I actually do".`),
+    h('div', { class: 'table-wrap' }, [
+      h('table', {}, [
+        h('thead', {}, h('tr', {}, [
+          h('th', { text: 'Category' }),
+          h('th', { text: 'Average time' }),
+          h('th', { class: 'num', text: 'Min' }),
+          h('th', { class: 'num', text: 'Per run' }),
+          h('th', { class: 'num', text: 'Live' }),
+          h('th', { class: 'num', text: 'AU' }),
+          h('th', { class: 'num', text: 'Used in' }),
+        ])),
+        h('tbody', {}, data.categories.map((c) => h('tr', {}, [
+          h('td', { text: c.category }),
+          h('td', {}, [
+            h('div', { class: 'meter' }, [
+              h('div', { class: 'meter-fill', style: { width: `${(c.meanMinutes / maxMin) * 100}%` } }),
+            ]),
+          ]),
+          h('td', { class: 'num', text: c.meanMinutes.toFixed(1) }),
+          h('td', { class: 'num', text: c.meanRunMinutes == null ? '—' : fmtMinutes(c.meanRunMinutes) }),
+          h('td', { class: 'num' }, [
+            fmtDensity(c.liveDensity),
+            c.liveDensity != null && c.liveCoverage < 0.999
+              ? h('div', { class: 'tiny', text: `of ${Math.round(c.liveCoverage * 100)}%` })
+              : null,
+          ]),
+          h('td', { class: 'num', text: fmtLoad(c.meanLoad) }),
+          h('td', { class: 'num tiny', text: `${c.sessionsUsedIn} of ${data.sessions}` }),
+        ]))),
+      ]),
+    ]),
+    h('p', { class: 'tiny', style: { marginTop: '6px' } },
+      'Live % is measured, not rated — the only observed number here — and covers only the drills you ran the second stopwatch on. A dash means none of that category was ever timed.'),
+  ]);
 }
 
 /* ---- 3. where the load went --------------------------------------------- */
@@ -436,6 +489,7 @@ function drillPanel(rolls) {
           h('th', { class: 'num', text: 'Min' }),
           h('th', { class: 'num', text: 'Avg run' }),
           h('th', { class: 'num', text: 'Int' }),
+          h('th', { class: 'num', text: 'Avg AU' }),
           h('th', { class: 'num', text: 'AU' }),
           h('th', { class: 'num', text: 'Live' }),
         ])),
@@ -453,6 +507,7 @@ function drillPanel(rolls) {
           h('td', { class: 'num', text: String(Math.round(r.minutes)) }),
           h('td', { class: 'num', text: r.meanMinutes == null ? '—' : fmtMinutes(r.meanMinutes) }),
           h('td', { class: 'num', text: r.meanIntensity == null ? '—' : r.meanIntensity.toFixed(1) }),
+          h('td', { class: 'num', text: r.runCount ? fmtLoad(r.load / r.runCount) : '—' }),
           h('td', { class: 'num', text: fmtLoad(r.load) }),
           h('td', { class: 'num', text: fmtDensity(r.liveDensity) }),
         ]))),
@@ -504,6 +559,8 @@ function openDrillHistory(roll) {
         ])
         : null,
 
+      windowTable(roll),
+
       h('h3', { style: { marginTop: '18px' }, text: 'Every run' }),
       h('div', { class: 'table-wrap' }, [
         h('table', {}, [
@@ -530,6 +587,53 @@ function openDrillHistory(roll) {
     );
     return null;
   }, { cancelLabel: 'Close', wide: true });
+}
+
+/**
+ * The same drill over three timescales, side by side rather than behind a
+ * selector — the comparison IS the point. A drill that ran 12 minutes in
+ * October and runs 20 now is a different drill, and a season average hides it.
+ *
+ * Windows are counted back from today, so a drill not run this week shows an
+ * honest empty row rather than borrowing its season figures.
+ */
+function windowTable(roll) {
+  if (!roll.windows) return null;
+
+  return h('div', { style: { marginTop: '18px' } }, [
+    h('h3', { text: 'Week, month, season' }),
+    h('div', { class: 'table-wrap' }, [
+      h('table', {}, [
+        h('thead', {}, h('tr', {}, [
+          h('th', { text: 'Window' }),
+          h('th', { class: 'num', text: 'Runs' }),
+          h('th', { class: 'num', text: 'Avg length' }),
+          h('th', { class: 'num', text: 'Avg AU' }),
+          h('th', { class: 'num', text: 'Live' }),
+          h('th', { class: 'num', text: 'Total AU' }),
+        ])),
+        h('tbody', {}, hist.DRILL_WINDOWS.map((w) => {
+          const d = roll.windows[w.key];
+          const empty = !d || !d.runs;
+          return h('tr', { style: empty ? { opacity: '.5' } : {} }, [
+            h('td', { text: w.label }),
+            h('td', { class: 'num', text: empty ? '—' : String(d.runs) }),
+            h('td', { class: 'num', text: empty || d.meanMinutes == null ? '—' : fmtMinutes(d.meanMinutes) }),
+            h('td', { class: 'num', text: empty || d.meanLoad == null ? '—' : fmtLoad(d.meanLoad) }),
+            h('td', { class: 'num' }, empty ? '—' : [
+              fmtDensity(d.liveDensity),
+              d.liveDensity != null && d.liveCoverage < 0.999
+                ? h('div', { class: 'tiny', text: `of ${Math.round(d.liveCoverage * 100)}%` })
+                : null,
+            ]),
+            h('td', { class: 'num', text: empty ? '—' : fmtLoad(d.load) }),
+          ]);
+        })),
+      ]),
+    ]),
+    h('p', { class: 'tiny', style: { marginTop: '6px' } },
+      'Averages are per run. Live % is measured on the runs you timed only — the "of x%" underneath is how much of the drill that covers. An empty row means the drill was not run in that window.'),
+  ]);
 }
 
 function movementProfile(roll) {

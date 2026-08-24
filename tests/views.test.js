@@ -646,31 +646,77 @@ contains('an untagged drill is admitted, not counted as zero', root, 'not in tho
 contains('AU are not comparable between tissues', root, 'NOT comparable between tissues');
 contains('and load is not what the body did', root, 'Compared against the squad median');
 
-/* ---- game days ---- */
+/* ---- the game week, from the coach's own label ---- */
 
-contains('with no game recorded, the panel says how to record one', root, 'No games recorded yet');
-contains('and explains it needs no drills', root, 'set Type to Game');
+contains('an unlabelled practice is asked for a game day', root, 'marked with a game day yet');
+contains('and told where to set it', root, 'Set game day');
+contains('and how many are waiting', root, 'waiting for one');
 
-const gameSession = makeSession({
-  date: '2026-08-19', type: 'Game', label: 'Away at Partizan',
+/* Label the seeded practice, and add a second GD-1 plus a GD-2 so the
+ * comparison has something to compare. */
+await db.put(db.STORES.sessions, { ...(await db.get(db.STORES.sessions, session.id)), gameDay: 'GD-1' });
+
+const gd1b = makeSession({
+  date: '2026-08-21', gameDay: 'GD-1', label: 'Friday', status: 'complete',
+  rosterIds: session.rosterIds,
+  startedAt: '2026-08-21T17:00:00.000Z', endedAt: '2026-08-21T18:30:00.000Z',
+});
+const gd2 = makeSession({
+  date: '2026-08-20', gameDay: 'GD-2', label: 'Thursday', status: 'complete',
+  rosterIds: session.rosterIds,
+});
+// A game day with no drills clocked in it: the row will read 0.
+const gdGame = makeSession({
+  date: '2026-08-22', gameDay: 'GD', type: 'Game', label: 'Away at Partizan',
   status: 'complete', rosterIds: session.rosterIds,
 });
-await db.put(db.STORES.sessions, gameSession);
+const gdx = makeSession({
+  date: '2026-08-12', gameDay: 'GD-X', label: 'Off week', status: 'complete',
+  rosterIds: session.rosterIds,
+});
+await db.putMany(db.STORES.sessions, [gd1b, gd2, gdx, gdGame]);
+await db.putMany(db.STORES.blocks, [
+  makeBlock({ sessionId: gd1b.id, drillName: 'Shooting series', category: 'Shooting',
+    intensity: 3, elapsedMs: 20 * 60000, liveMs: 8 * 60000, running: false }),
+  makeBlock({ sessionId: gd2.id, drillName: 'Live 5v5', category: 'Live / scrimmage',
+    intensity: 8, elapsedMs: 45 * 60000, liveMs: 30 * 60000, running: false }),
+  makeBlock({ sessionId: gdx.id, drillName: 'Conditioning', category: 'Conditioning',
+    intensity: 9, elapsedMs: 30 * 60000, running: false }),
+]);
 
 root = newRoot();
 await analysis.render(root);
 await flush();
 
-contains('a session typed Game needs no new field to count', root, 'Days around a game');
-contains('the day before it is labelled GD-1', root, 'GD-1');
-ok('and the no-games message is gone',
-  root.textContent.indexOf('No games recorded yet') === -1);
-contains('a bucket built on one day says so', root, 'fewer than three days');
-contains('a 0 AU game day is explained, not left to imply games are free',
+contains('the game week panel appears once practices are labelled', root, 'The game week');
+contains('GD-1 is compared against itself', root, 'GD-1');
+contains('GD-2 too', root, 'GD-2');
+contains('a bucket built on few practices says so', root, 'fewer than three practices');
+contains('GD-X is excluded, and says so', root, 'left out of this table');
+ok('and GD-X is not a row in the comparison',
+  root.textContent.indexOf('GD-X is left out') !== -1);
+contains('clocked time is distinguished from wall clock', root, 'not wall clock');
+contains('a 0 game day is explained, not left to imply games are free',
   root, 'not what a game costs');
-contains('and the totals admit they exclude games', root, 'missing the games');
-contains('rest days are counted, not dropped', root, 'a rest day before a game is a decision');
-contains('average drill length is explained as per run', root, 'not the length of the session');
+contains('and the totals admit they exclude games', root, 'exclude games');
+contains('live density says what it covers', root, 'only the drills you timed');
+
+/* What a game day is made of — the category breakdown for one GD. */
+contains('the category breakdown appears', root, 'What a game day is made of');
+contains('and names a category', root, 'Shooting');
+contains('it says how many practices it averaged', root, 'practice');
+contains('a skipped category averaging lower is explained', root, 'how much of this do I actually do');
+
+/* Tapping a game-day row lists every practice behind it. */
+const gdRow = root.querySelectorAll('tr').filter((r) => r.textContent.indexOf('GD-2') === 0)[0];
+if (gdRow) {
+  gdRow.click();
+  await flush();
+  const gm = document.body.querySelectorAll('.modal')[0];
+  ok('a game-day row opens the practices behind it', !!gm);
+  if (gm) contains('and lists them', gm, 'Every GD-2');
+  document.body.querySelectorAll('.scrim').forEach((n) => n.remove());
+}
 
 /* ---- an unrated drill must not read as a light week ---- */
 
@@ -724,7 +770,10 @@ if (playerRow) {
 }
 
 await db.remove(db.STORES.blocks, ghost.id);
-await db.remove(db.STORES.sessions, gameSession.id);
+for (const x of [gd1b, gd2, gdx, gdGame]) {
+  await db.removeBy(db.STORES.blocks, 'sessionId', x.id);
+  await db.remove(db.STORES.sessions, x.id);
+}
 
 /* ---- the offline shell must list every module the app imports ----
  * A file missing here loads fine on wifi and fails in a gym with none — the

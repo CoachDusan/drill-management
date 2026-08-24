@@ -423,6 +423,60 @@ if (editor) {
   document.body.querySelectorAll('.scrim').forEach((n) => n.remove());
 }
 
+/* ---- stage 3: what the players said ---- */
+{
+  const rpe = await import('../js/views/rpe.js');
+  const doneS = await db.get(db.STORES.sessions, session.id);
+  const sess = { ...doneS, status: 'complete', endedAt: new Date().toISOString() };
+  await db.put(db.STORES.sessions, sess);
+  const squad = (await db.getAll(db.STORES.players)).slice(0, 2);
+  await db.put(db.STORES.sessions, { ...sess, rosterIds: squad.map((p) => p.id) });
+
+  const opened = rpe.collectRPE({ ...sess, rosterIds: squad.map((p) => p.id) }, squad);
+  await flush();
+  const modal = document.body.querySelectorAll('.modal')[0];
+  ok('the ratings screen opens', !!modal);
+  if (modal) {
+    contains('it asks for the player\u2019s own answer', modal, 'Their answer, not yours');
+    contains('it says when to ask', modal, 'half an hour');
+    contains('it says a skipped player is blank, not zero', modal, 'never counted as an easy day');
+    contains('it counts who has answered', modal, `0 of ${squad.length} answered`);
+
+    // One tap per player is the whole design constraint — no modal each.
+    const scales = modal.querySelectorAll('.iscale');
+    ok('every player gets a 1-10 row on one screen', scales.length === squad.length,
+      String(scales.length));
+
+    const sevens = scales[0].querySelectorAll('button').filter((b) => b.textContent === '7');
+    if (sevens[0]) {
+      sevens[0].click();
+      await flush();
+      contains('tapping a number shows the player wording', modal, 'Tired, glad of the breaks');
+      contains('and updates the counter', modal, `1 of ${squad.length} answered`);
+      sevens[0].click();   // tap the same number again
+      await flush();
+      contains('tapping it again clears the mistap', modal, `0 of ${squad.length} answered`);
+      sevens[0].click();
+      await flush();
+    }
+
+    const save = document.body.querySelectorAll('button')
+      .filter((b) => b.textContent.indexOf('Save ratings') !== -1)[0];
+    ok('ratings can be saved', !!save);
+    if (save) { save.click(); await flush(); }
+    await opened;
+
+    const stored = await db.getBy(db.STORES.playerSessions, 'sessionId', sess.id);
+    const withRpe = stored.filter((r) => r.rpe != null);
+    ok('the rating is written to the player record', withRpe.length === 1, String(withRpe.length));
+    ok('and it is the number that was tapped', withRpe[0] && withRpe[0].rpe === 7,
+      String(withRpe[0] && withRpe[0].rpe));
+    ok('the player who said nothing has no rating',
+      stored.filter((r) => r.rpe === 0).length === 0);
+  }
+  document.body.querySelectorAll('.scrim').forEach((n) => n.remove());
+}
+
 /* ---- rating a courtside drill afterwards feeds the practice ----
  * The coach adds a drill mid-practice and rates it during or after. If the
  * rating did not travel back to the run, the session would stay permanently
@@ -514,6 +568,13 @@ if (summary) {
   contains('the summary reports live density', summary, 'Live density');
   contains('and qualifies how much it covers', summary, 'covers');
   contains('and as a share of the session', summary, '% of the session');
+
+  // Stage 3: the rating saved earlier must show up as a comparison here.
+  contains('the summary compares plan against feeling', summary, 'what they felt');
+  contains('it shows what the coach prescribed', summary, 'You said');
+  contains('and what the player answered', summary, 'He said');
+  contains('partial coverage is admitted', summary, 'players answered');
+  contains('one session is not treated as proof', summary, 'proves nothing on its own');
   document.body.querySelectorAll('.scrim').forEach((n) => n.remove());
 }
 practice.teardown();
@@ -556,6 +617,40 @@ root = newRoot();
 await analysis.render(root);
 await flush();
 contains('analysis screen renders', root, 'Analysis');
+
+/* ---- the offline shell must list every module the app imports ----
+ * A file missing here loads fine on wifi and fails in a gym with none — the
+ * worst possible failure, because it only shows up where it cannot be fixed.
+ * sw.js and offline-check.html keep separate copies of the list, so they are
+ * checked against each other and against what is actually on disk. */
+{
+  const swSrc = read('sw.js');
+  const checkSrc = read('offline-check.html');
+
+  const shell = (swSrc.match(/const SHELL = \[([\s\S]*?)\]/) || [])[1] || '';
+  const swList = (shell.match(/'\.\/[^']*'/g) || []).map((x) => x.slice(1, -1));
+
+  const checkList = ((checkSrc.match(/var SHELL = \[([\s\S]*?)\];/) || [])[1] || '')
+    .match(/'\.\/[^']*'/g).map((x) => x.slice(1, -1));
+
+  ok('the service worker lists the app shell', swList.length > 10, String(swList.length));
+  // Order is irrelevant to caching; contents are not.
+  ok('the offline checker lists exactly the same files',
+    swList.slice().sort().join('|') === checkList.slice().sort().join('|'),
+    `only in sw: ${swList.filter((x) => checkList.indexOf(x) === -1).join()} | ` +
+    `only in checker: ${checkList.filter((x) => swList.indexOf(x) === -1).join()}`);
+
+  // Every module js/ actually contains must be in that list.
+  const modules = swList.filter((u) => u.indexOf('./js/') === 0);
+  const onDisk = [
+    'app', 'db', 'models', 'load', 'ui', 'components',
+  ].map((n) => `./js/${n}.js`).concat(
+    ['practice', 'drills', 'roster', 'analysis', 'settings', 'rpe']
+      .map((n) => `./js/views/${n}.js`));
+
+  const missing = onDisk.filter((f) => modules.indexOf(f) === -1);
+  ok('no module is left out of the offline cache', missing.length === 0, missing.join());
+}
 
 print(`\n${pass} passed, ${fail} failed`);
 if (fail) throw new Error(`${fail} test(s) failed`);

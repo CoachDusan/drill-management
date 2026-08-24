@@ -10,7 +10,7 @@ import {
   sessionLiveMinutesByPlayer, fmtDensity,
   blockLoad, blockMinutes, participationOf, playerBlockLoad,
   sessionLoadByPlayer, sessionMinutesByPlayer, sessionTeamLoad,
-  loadCoverage, sRPELoad, dailySeries, acwrSeries, monotonySeries, weekOverWeek,
+  loadCoverage, sRPELoad, feltVsPrescribed, rpeCoverage, sessionGap, gapFlag, dailySeries, acwrSeries, monotonySeries, weekOverWeek,
   acwrFlag, monotonyFlag, fmtClock,
 } from '../js/load.js';
 import { addDays } from '../js/models.js';
@@ -215,6 +215,79 @@ eq('zero clock', fmtClock(0), '0:00');
 
   const full = loadCoverage([rated]);
   eq('a fully rated session reports complete coverage', full.fraction, 1);
+}
+
+/* ---- what he asked for vs what they felt -------------------------------- */
+{
+  // 30 minutes at intensity 6, everyone full in.
+  const blocks = [
+    { intensity: 6, elapsedMs: 30 * 60000, participation: {} },
+  ];
+  const ids = ['p1', 'p2', 'p3'];
+  const sessions = [
+    { playerId: 'p1', rpe: 6 },   // agrees
+    { playerId: 'p2', rpe: 9 },   // felt much harder
+    // p3 never answered
+  ];
+  const rows = feltVsPrescribed(blocks, ids, sessions);
+  const by = (id) => rows.find((r) => r.playerId === id);
+
+  eq('prescribed intensity is his load spread over his minutes',
+     Math.round(by('p1').prescribedIntensity * 100) / 100, 6);
+  eq('a player who agreed shows no gap', by('p1').gap, 0);
+  eq('a player who felt it harder shows a positive gap', by('p2').gap, 3);
+  eq('felt load is the rating times the minutes', by('p2').feltLoad, 270);
+
+  eq('a player who did not answer has no rating', by('p3').rpe, null);
+  eq('and no gap — never a zero one', by('p3').gap, null);
+  eq('and no felt load', by('p3').feltLoad, null);
+
+  const cov = rpeCoverage(ids, sessions);
+  eq('coverage counts who answered', cov.answered, 2);
+  eq('out of everyone who trained', cov.total, 3);
+  eq('and names who is missing', cov.missing.join(), 'p3');
+
+  // Median, not mean: one player having a rough day must not drag the squad's
+  // number with him. Three answers where the two differ, so this actually
+  // discriminates — with an even split the mean and median coincide and the
+  // test proves nothing.
+  const three = feltVsPrescribed(blocks, ['p1', 'p2', 'p3'], [
+    { playerId: 'p1', rpe: 6 },   // gap 0
+    { playerId: 'p2', rpe: 6 },   // gap 0
+    { playerId: 'p3', rpe: 9 },   // gap 3 — the outlier
+  ]);
+  eq('the session gap is the middle player', sessionGap(three), 0);
+  ok('which is not what the average would say',
+     Math.abs(sessionGap(three) - 1) > 0.5);
+
+  eq('nobody answering gives no session gap',
+     sessionGap(feltVsPrescribed(blocks, ids, [])), null);
+}
+
+/* ---- a limited player is compared on the minutes he actually did -------- */
+{
+  const blocks = [{ intensity: 8, elapsedMs: 60 * 60000, participation: { p2: 0.5 } }];
+  const rows = feltVsPrescribed(blocks, ['p1', 'p2'], [
+    { playerId: 'p1', rpe: 8 }, { playerId: 'p2', rpe: 8 },
+  ]);
+  const limited = rows.find((r) => r.playerId === 'p2');
+  eq('a limited player is credited half the minutes', limited.minutes, 30);
+  eq('so his felt load is halved too', limited.feltLoad, 240);
+  ok('and rating it the same still reads as agreement',
+     Math.abs(limited.gap) < 0.001, String(limited.gap));
+}
+
+/* ---- the wording stays a prompt, not a diagnosis ------------------------ */
+{
+  eq('a small gap is treated as agreement', gapFlag(0.6).level, 'ok');
+  eq('so is a small negative one', gapFlag(-0.6).level, 'ok');
+  eq('a full point is worth noting', gapFlag(1.2).level, 'note');
+  eq('two points is worth a look', gapFlag(2.5).level, 'watch');
+  eq('and so is two points the other way', gapFlag(-2.5).level, 'watch');
+  eq('no rating is its own state', gapFlag(null).level, 'none');
+  ok('nothing here diagnoses anything',
+     !/injur|overtrain|risk of|danger/i.test(
+       [0.5, 1.5, 2.5, -1.5, -2.5, null].map((g) => gapFlag(g).note).join(' ')));
 }
 
 print(`\n${pass} passed, ${fail} failed`);

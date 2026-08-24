@@ -286,6 +286,109 @@ export function sRPELoad(rpe, minutes) {
   return rpe * minutes;
 }
 
+/**
+ * What the coach asked for, next to what the player felt — the comparison this
+ * whole app exists to make.
+ *
+ * Both sides are (1-10) x minutes over the same session, so they are directly
+ * comparable. The useful number for a coach is NOT the AU gap, which scales
+ * with how long practice was; it is the gap in intensity points, because that
+ * is the language he already rates drills in. "You called it a 6, he felt an
+ * 8" is a sentence he can act on. 240 AU is not.
+ *
+ * prescribed intensity = his load / his minutes  (his own average for the day)
+ * felt intensity       = the player's single 1-10 answer
+ *
+ * Returns one row per player. `felt` is null when that player did not answer —
+ * never 0, because "he didn't say" and "he felt nothing" are different facts
+ * and only one of them is information.
+ */
+export function feltVsPrescribed(blocks, playerIds, playerSessions) {
+  const loads = sessionLoadByPlayer(blocks, playerIds);
+  const minutes = sessionMinutesByPlayer(blocks, playerIds);
+  const byPlayer = new Map((playerSessions || []).map((ps) => [ps.playerId, ps]));
+
+  return playerIds.map((id) => {
+    const load = loads.get(id) || 0;
+    const mins = minutes.get(id) || 0;
+    const ps = byPlayer.get(id);
+    const rpe = ps && ps.rpe != null ? Number(ps.rpe) : null;
+
+    const prescribedIntensity = mins > 0 ? load / mins : null;
+    const feltLoad = sRPELoad(rpe, mins);
+
+    return {
+      playerId: id,
+      minutes: mins,
+      prescribedLoad: load,
+      prescribedIntensity,
+      rpe,
+      feltLoad,
+      // Positive means it felt harder than it was written down as.
+      gap: (rpe != null && prescribedIntensity != null) ? rpe - prescribedIntensity : null,
+    };
+  });
+}
+
+/** How many of the players who trained actually gave a rating. */
+export function rpeCoverage(playerIds, playerSessions) {
+  const byPlayer = new Map((playerSessions || []).map((ps) => [ps.playerId, ps]));
+  const answered = playerIds.filter((id) => {
+    const ps = byPlayer.get(id);
+    return ps && ps.rpe != null;
+  });
+  return {
+    answered: answered.length,
+    total: playerIds.length,
+    fraction: playerIds.length ? answered.length / playerIds.length : 0,
+    missing: playerIds.filter((id) => !answered.includes(id)),
+  };
+}
+
+/**
+ * The session's own gap: the middle player's, not the average.
+ *
+ * Median on purpose. One player having a miserable day should not drag the
+ * squad's number with him — that is exactly the individual case the per-player
+ * rows are for. Returns null when nobody answered.
+ */
+export function sessionGap(rows) {
+  const gaps = rows.map((r) => r.gap).filter((g) => g != null).sort((a, b) => a - b);
+  if (!gaps.length) return null;
+  const mid = Math.floor(gaps.length / 2);
+  return gaps.length % 2 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2;
+}
+
+/**
+ * Wording for a gap. A prompt to look, never a diagnosis — and deliberately
+ * quiet below a full intensity point, because the coach's own drills vary by
+ * +/-0.64 between runs and a 1-10 answer given in a corridor is not a precise
+ * instrument either.
+ */
+export function gapFlag(gap) {
+  if (gap == null) return { level: 'none', label: 'No rating', note: 'Nobody has answered yet.' };
+  if (gap >= 2) return {
+    level: 'watch', label: 'Felt much harder',
+    note: 'They are working well above what this was written down as. Worth asking what made it heavy.',
+  };
+  if (gap >= 1) return {
+    level: 'note', label: 'Felt harder',
+    note: 'A little above the plan. Worth watching if it keeps happening.',
+  };
+  if (gap <= -2) return {
+    level: 'watch', label: 'Felt much easier',
+    note: 'Well below what was planned. Either the drills are rated high, or they were not going after it.',
+  };
+  if (gap <= -1) return {
+    level: 'note', label: 'Felt easier',
+    note: 'A little below the plan. Worth watching if it keeps happening.',
+  };
+  return {
+    level: 'ok', label: 'Close to plan',
+    note: 'What you asked for and what they felt agree, within the noise of both.',
+  };
+}
+
 /* ---- daily series ----------------------------------------------------- */
 
 /**

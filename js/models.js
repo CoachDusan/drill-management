@@ -228,6 +228,38 @@ export function intensityBand(value) {
   return 'i5';
 }
 
+/* ---- what the player says ---------------------------------------------
+ *
+ * The same 1-10 scale, worded from the player's side. The drill anchors above
+ * describe what a drill IS ("half-court shell, controlled 3v0"); a player is
+ * not rating a drill, he is rating his own afternoon, and asking him to match
+ * himself against a list of drills would produce the coach's answer back.
+ *
+ * Deliberately blunt and short: this gets asked in a corridor, often in a
+ * second language, sometimes while someone is putting his shoes on.
+ *
+ * Ask about 30 minutes after the session (Foster et al.) — asked on the floor,
+ * the last drill dominates the answer instead of the whole practice.
+ */
+export const RPE_SCALE = [
+  { value: 1,  label: 'Very light',      example: 'Barely felt like training' },
+  { value: 2,  label: 'Light',           example: 'Easy the whole way through' },
+  { value: 3,  label: 'Easy',            example: 'Comfortable, never out of breath' },
+  { value: 4,  label: 'Moderate',        example: 'Working, but could talk' },
+  { value: 5,  label: 'Somewhat hard',   example: 'Breathing hard in places' },
+  { value: 6,  label: 'Hard',            example: 'Had to push at times' },
+  { value: 7,  label: 'Very hard',       example: 'Tired, glad of the breaks' },
+  { value: 8,  label: 'Really hard',     example: 'Heavy legs, wanted it to end' },
+  { value: 9,  label: 'Extremely hard',  example: 'Almost nothing left' },
+  { value: 10, label: 'Maximal',         example: 'Could not have done more' },
+];
+
+/** The player-facing wording for a 1-10 answer. */
+export function rpeInfo(v) {
+  const n = Math.min(10, Math.max(1, Math.round(Number(v) || 0)));
+  return RPE_SCALE.find((r) => r.value === n) || RPE_SCALE[4];
+}
+
 /* ---- practice groups -------------------------------------------------
  *
  * Practice runs as a whole squad most of the time, so 'Team' stays first and

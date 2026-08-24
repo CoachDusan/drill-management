@@ -9,7 +9,7 @@
  * it lives in IndexedDB on the device.
  */
 
-const VERSION = 'v3';
+const VERSION = 'v4';
 const CACHE = `load-tracker-${VERSION}`;
 
 const SHELL = [
@@ -27,6 +27,7 @@ const SHELL = [
   './js/views/drills.js',
   './js/views/roster.js',
   './js/views/analysis.js',
+  './js/views/rpe.js',
   './js/views/settings.js',
   './icons/icon-192.png',
   './icons/icon-512.png',

@@ -24,6 +24,7 @@ import {
   textInput, numberInput, selectInput, emptyState,
 } from '../ui.js';
 import { intensityPicker, intensityBadge } from '../components.js';
+import { collectRPE, feltPanel } from './rpe.js';
 
 const SESSION_TYPES = ['Practice', 'Shootaround', 'Game', 'Lift', 'Recovery', 'Other'];
 
@@ -86,9 +87,15 @@ async function renderIdle(root, sessions) {
     .slice(0, 12);
 
   const recentCards = [];
+  let awaitingRPE = null;
   for (const s of recent) {
     const blocks = await db.getBy(db.STORES.blocks, 'sessionId', s.id);
-    recentCards.push(sessionRow(s, blocks));
+    const ps = await db.getBy(db.STORES.playerSessions, 'sessionId', s.id);
+    const rated = ps.some((r) => r.rpe != null);
+    // The most recent unrated session, so the nudge is about today's practice
+    // rather than something from three weeks ago he is never going back to.
+    if (!rated && !awaitingRPE && blocks.length) awaitingRPE = { session: s, players: (s.rosterIds || []).length };
+    recentCards.push(sessionRow(s, blocks, rated));
   }
 
   mount(root,
@@ -112,6 +119,22 @@ async function renderIdle(root, sessions) {
         'Once both are in, starting a practice takes one tap.',
       ]),
 
+    // A rating is worth almost nothing a week later — memory of how hard a
+    // session felt does not survive. So the ask sits on the front screen while
+    // it is still worth asking, and disappears once it is done.
+    awaitingRPE
+      ? h('div', { class: 'note', style: { marginBottom: '14px' } }, [
+        h('div', {}, [
+          h('strong', { text: `${formatDate(awaitingRPE.session.date)} has no player ratings yet. ` }),
+          'Ask each player how hard it was, 1 to 10, about half an hour after practice. Left much longer and the answer is a guess.',
+        ]),
+        h('button', {
+          class: 'btn btn-sm btn-primary', style: { marginTop: '10px' },
+          onclick: () => openSessionSummary(awaitingRPE.session),
+        }, 'Open that session'),
+      ])
+      : null,
+
     recent.length
       ? h('div', {}, [h('h2', { text: 'Recent sessions' }), h('div', { class: 'list' }, recentCards)])
       : (ready ? emptyState('⏱', 'No sessions recorded yet',
@@ -119,12 +142,15 @@ async function renderIdle(root, sessions) {
   );
 }
 
-function sessionRow(s, blocks) {
+function sessionRow(s, blocks, rated) {
   const load = sessionTeamLoad(blocks);
   const mins = sessionTeamMinutes(blocks);
   return h('div', { class: 'row clickable', onclick: () => openSessionSummary(s) }, [
     h('div', { class: 'grow' }, [
-      h('div', { class: 'name', text: `${formatDate(s.date)}${s.label ? ` · ${s.label}` : ''}` }),
+      h('div', { class: 'name' }, [
+        `${formatDate(s.date)}${s.label ? ` · ${s.label}` : ''}`,
+        rated ? h('span', { class: 'chip on', style: { marginLeft: '8px' }, text: 'rated' }) : null,
+      ]),
       h('div', { class: 'tiny', text: `${s.type} · ${blocks.length} drill${blocks.length === 1 ? '' : 's'} · ${Math.round(mins)} min` }),
     ]),
     h('div', { style: { textAlign: 'right' } }, [
@@ -1150,9 +1176,10 @@ async function editSessionRoster(session) {
 }
 
 async function openSessionSummary(session) {
-  const [players, blocks] = await Promise.all([
+  const [players, blocks, playerSessions] = await Promise.all([
     db.getAll(db.STORES.players),
     db.getBy(db.STORES.blocks, 'sessionId', session.id),
+    db.getBy(db.STORES.playerSessions, 'sessionId', session.id),
   ]);
   const roster = players.filter((p) => (session.rosterIds || []).includes(p.id));
   const byPlayer = sessionLoadByPlayer(blocks, roster.map((p) => p.id));
@@ -1219,6 +1246,18 @@ async function openSessionSummary(session) {
 
       tissueSummaryBlock(ordered),
 
+      feltPanel(session, roster, ordered, playerSessions)
+        || h('div', { class: 'note', style: { marginTop: '18px' } }, [
+          h('div', {}, [
+            h('strong', { text: 'Nobody has rated this session yet. ' }),
+            'Ask each player how hard it was, 1 to 10, about half an hour after you finish.',
+          ]),
+          h('button', {
+            class: 'btn btn-sm btn-primary', style: { marginTop: '10px' },
+            onclick: () => done({ __action: 'rpe' }),
+          }, 'Collect ratings'),
+        ]),
+
       h('h3', { style: { marginTop: '18px' }, text: 'Load per player' }),
       h('div', { class: 'table-wrap' }, [
         h('table', {}, [
@@ -1234,6 +1273,7 @@ async function openSessionSummary(session) {
       ]),
 
       h('div', { class: 'btn-row', style: { marginTop: '18px' } }, [
+        h('button', { class: 'btn btn-sm', onclick: () => done({ __action: 'rpe' }) }, 'Player ratings'),
         h('button', { class: 'btn btn-sm', onclick: () => done({ __action: 'roster' }) }, 'Edit who trained'),
         h('button', { class: 'btn btn-sm btn-danger', onclick: () => done({ __action: 'delete' }) }, 'Delete session'),
       ]),
@@ -1245,6 +1285,12 @@ async function openSessionSummary(session) {
     if (res && res.__action === 'editBlock') {
       const blk = await db.get(db.STORES.blocks, res.blockId);
       if (blk) await editBlock(blk, session, roster);
+      const again = await db.get(db.STORES.sessions, session.id);
+      if (again) await openSessionSummary(again);
+      return;
+    }
+    if (res && res.__action === 'rpe') {
+      await collectRPE(session, roster);
       const again = await db.get(db.STORES.sessions, session.id);
       if (again) await openSessionSummary(again);
       return;

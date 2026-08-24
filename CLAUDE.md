@@ -233,6 +233,50 @@ original sheet. `tests/seed.test.js` verifies internal consistency and
 spot-checks values, but cannot verify the transcription — only the source file
 can.
 
+## Stage 3: what the players said
+
+The coach's rating is what he ASKED for. RPE is what the body on the receiving
+end actually felt. A standing gap between them means his intensity ratings and
+his players disagree, and the players are the ones who get injured.
+
+**The comparison is in intensity points, not AU.** Both sides are (1-10) x the
+same minutes, so the AU gap just scales with how long practice was. The number
+a coach can act on is "you called it a 6, he felt an 8" — the language he
+already rates drills in. `feltVsPrescribed()` returns the prescribed intensity
+(his load spread over his own minutes) beside the player's single answer.
+
+**The session's number is the median, not the mean.** One player having a rough
+night must not drag the squad's figure with him; that is exactly what the
+per-player rows are for. The test for this deliberately uses three answers,
+because with an even split the mean and median coincide and the test proves
+nothing — it passed a sabotage run before that was fixed.
+
+**A missing rating is null, never 0.** Fourth place this rule now appears, with
+untimed clocks, untagged movement and unrated drills. `rpeCoverage()` reports
+who did not answer, and the summary says so out loud: a comparison drawn on
+half the squad is not the squad's comparison.
+
+**`gapFlag()` stays quiet below a full intensity point.** The coach's own drills
+vary by +/-0.64 between runs, and a 1-10 answer given in a corridor is not a
+precise instrument either. Wording is always a prompt to look — "worth asking
+what made it heavy" — never a diagnosis. A test asserts no wording in there
+contains injury or overtraining language, and it catches a deliberate breach.
+
+**Its own 1-10 scale, worded from the player's side** (`RPE_SCALE`). The drill
+anchors describe what a drill IS ("half-court shell, controlled 3v0"); a player
+rating his own afternoon against a list of drills would just hand the coach his
+own answer back. Blunt and short, because it gets asked in a corridor, often in
+a second language, sometimes while someone is putting his shoes on.
+
+**Asked about 30 minutes after practice** (Foster et al.). Asked on the floor,
+the last drill drowns out the rest of the session. The app says so on the
+screen, and nudges from the Practice tab while the answer is still worth having
+— memory of how hard a session felt does not survive a week.
+
+**One screen, one tap per player.** No modal per player, no scrolling back and
+forth; tapping the same number again clears a mistap. A squad is about fifteen
+taps. Anything slower does not get collected in February.
+
 ## Club data: what must never be committed
 
 The repository is public so that GitHub Pages can serve it for free. Everything
@@ -269,12 +313,13 @@ js/load.js            the maths + the honesty about its limits
 js/ui.js              DOM builder, modal, toast, file download/pick
 js/components.js      intensity picker/badge, status dot
 js/app.js             hash router and nav
-js/views/*.js         one file per tab
+js/views/*.js         one file per tab, plus rpe.js (a flow, not a tab)
 tests/load.test.js    unit tests for the maths
 tests/intensity.test.js  the grid, the movement tags, and the fit to real data
 tests/library.test.js importing a drill library without destroying practices
 tests/harness.js      fake DOM + IndexedDB so views can run headlessly
-tests/views.test.js   smoke tests thatevery screen renders and saves correctly
+tests/views.test.js   smoke tests that every screen renders and saves correctly,
+                      and that the offline cache lists every module
 ```
 
 ## Running and testing it
@@ -450,6 +495,6 @@ retrying the push.
 2. **Done** — live practice: concurrent stopwatches, group splits, three-state
    participation, pause/resume that survives a reload, manual entry for drills
    run before the app was open, context tags and notes, session summary.
-3. Post-practice: per-player RPE, compared against prescribed load.
+3. **Done** — post-practice per-player RPE, compared against prescribed load.
 4. Analysis: weekly load, per-player trends, ACWR, monotony/strain.
 5. Custom fields the coach defines himself, folded into the comparisons.

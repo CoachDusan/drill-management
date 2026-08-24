@@ -229,9 +229,9 @@ inventing exactly the kind of data this project refuses to invent. The library
 flags untagged drills and offers a one-at-a-time run through them instead.
 
 The seeded numbers were read off images and have never been checked against the
-original sheet. `tests/seed.test.js` verifies internal consistency and
-spot-checks values, but cannot verify the transcription — only the source file
-can.
+original sheet. Nothing can verify that transcription except the source file.
+(An earlier `tests/seed.test.js` is referenced in older notes but does not
+exist; the library is covered by `tests/library.test.js`.)
 
 ## Stage 3: what the players said
 
@@ -277,6 +277,95 @@ screen, and nudges from the Practice tab while the answer is still worth having
 forth; tapping the same number again clears a mistap. A squad is about fifteen
 taps. Anything slower does not get collected in February.
 
+## Stage 4: analysis, and why it is drill-first
+
+**The unit of this screen is the drill and the day, not the session.** This was
+the coach's own redirect. Offered three versions of a week-and-players screen,
+he asked instead for "drill load and analysis of the drills" — which is how he
+actually works: he plans a week by choosing drills, and he decides what a day
+two days out from a game should look like. A list of sessions answers neither
+question. The week/player/ACWR material from the original stage-4 scope is
+still there, underneath, rather than first.
+
+**Game-day analysis (GD-1, GD-2 …) is the panel he asked for.** A week is not
+Monday to Sunday, it is a countdown to the next game, and the question is
+whether every GD-1 of the season actually looks like a GD-1.
+
+Games needed **no new field** — `SESSION_TYPES` has always included `Game`, so
+a played game is already recordable and already counted. That is the fifth time
+the answer has been "already recorded, not displayed". Keep checking first.
+
+The one genuine gap was a game that has *not happened yet*: today cannot read
+GD-1 unless the app knows about tomorrow's fixture. Hence a small upcoming-games
+list, stored under the `fixtures` meta key and edited from a button on the panel
+itself rather than from Settings, because that is where it is read. Fixtures in
+the past are dropped on save — by then the game is a session.
+
+Rules in `gameDayLabel()`, all of them decisions rather than defaults:
+- **A tie goes to the game ahead.** With games either side, the day belongs to
+  the preparation for the next one, which is what he is deciding about.
+- **`maxAfter` is 2, `maxBefore` is 7.** GD+1 is a recovery day and means
+  something; GD+4 is just a Tuesday.
+- **Rest days stay in the bucket.** A GD-1 the squad did nothing on is a real,
+  deliberate GD-1. Dropping it would flatter the average — a test asserts this
+  and catches its removal.
+- **Average drill length is per RUN, not per session**, and says so on screen:
+  when practice splits into groups two clocks run at once, so a day's drill
+  minutes can exceed the length of the practice.
+- **Every bucket carries `n`.** Below three days it is labelled as too few to
+  read. Two practices is not a pattern.
+
+**A game day shows 0 AU, and that had to be said out loud.** Nobody runs a
+stopwatch on a game, so the app genuinely does not know what one cost — almost
+certainly the heaviest day of the week. Sitting a 0 next to a 384 AU Monday
+would read as "games are free", and it also means weekly totals, monotony and
+ACWR all exclude games entirely. The panel states this whenever the GD row is
+empty rather than letting the row speak for itself.
+
+**The provisional ACWR was asked for, against a recommendation, and is
+guarded.** The concern (a ratio off a few days is noise wearing a decimal
+point) was put in front of the coach and he chose it anyway, so it ships.
+What makes it safe:
+- It divides by the days that **actually exist**, not by 28. Dividing a 10-day
+  total by four understates chronic load and invents a spike out of nothing —
+  sabotaging this exact line turns steady load into a false 1.87.
+- It stays blank for the first **seven** days, and that is arithmetic, not
+  caution: until there is more history than the acute window, both windows are
+  the same days and the answer can only be 1.00. A number that can only be 1.00
+  is not an early reading of anything. The screen explains that instead.
+- It is marked `provisional` on the tile every time, not once in a footnote,
+  and the wording states how many days it stands on.
+- The real 28-day figure is untouched and still withheld until day 28.
+
+**ACWR and monotony are computed over the whole season, then sliced.** Both
+count backwards from a day, so computing them on a 4-week view would make the
+season look like it started a month ago.
+
+**Coverage travels with every total, again.** An unrated drill contributes no
+load, so a window that is 30% unrated is incomplete, not light — stated at
+window level, per day (striped bars), per drill row, and per movement panel.
+The movement panel used to *replace* its "units are not comparable between
+tissues" caveat with the coverage warning, which removed the caveat exactly
+when the totals deserved it least; a test caught that and both now show.
+
+**Drill runs now snapshot their `category`.** Re-filing a drill in the library
+must not rewrite what last November's practices were made of — the same reason
+name, intensity and movement tags are already snapshots. Runs recorded before
+this fall back to a library lookup and are labelled "Not in the library" if the
+drill is gone, so the fallback shrinks over time rather than growing. No
+migration and no schema bump; the tablet is carrying real data.
+
+**Charts are flexbox divs, not SVG and not a library.** They scale to any
+tablet width without distorting text, work in dark mode off the same CSS
+variables, and add nothing to maintain. Bars switch from per-day to per-week
+past 70 days. A striped bar means that day contains unrated drills, so a short
+bar is not mistaken for an easy day.
+
+`tests/history.test.js` covers the aggregation. Three sabotage runs were
+checked to fail before the green run was trusted: making an unrated drill count
+as zero, dropping rest days from the game-day buckets, and dividing the
+provisional ACWR by 28 days that do not exist. All three were caught.
+
 ## Club data: what must never be committed
 
 The repository is public so that GitHub Pages can serve it for free. Everything
@@ -310,11 +399,14 @@ compat.html           standalone browser check; open it on a new device first
 js/db.js              IndexedDB wrapper, backup export/import
 js/models.js          domain vocabulary: intensity scale, factories, dates
 js/load.js            the maths + the honesty about its limits
+js/history.js         aggregation across many practices: days, drills,
+                      categories, game-day buckets, per-player series
 js/ui.js              DOM builder, modal, toast, file download/pick
 js/components.js      intensity picker/badge, status dot
 js/app.js             hash router and nav
 js/views/*.js         one file per tab, plus rpe.js (a flow, not a tab)
 tests/load.test.js    unit tests for the maths
+tests/history.test.js the aggregation layer, and the honesty rules in it
 tests/intensity.test.js  the grid, the movement tags, and the fit to real data
 tests/library.test.js importing a drill library without destroying practices
 tests/harness.js      fake DOM + IndexedDB so views can run headlessly
@@ -337,7 +429,8 @@ Run the tests (no Node required — macOS ships JavaScriptCore):
 JSC=/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc
 $JSC -m tests/load.test.js       # the maths
 $JSC -m tests/intensity.test.js # the intensity grid + its fit to measured data
-$JSC -m tests/seed.test.js      # the starter drill library
+$JSC -m tests/history.test.js   # days, drills, game-day buckets
+$JSC -m tests/library.test.js   # importing a library without destroying practices
 $JSC -m tests/views.test.js     # every screen renders, saves, and restores
 ```
 
@@ -496,5 +589,6 @@ retrying the push.
    participation, pause/resume that survives a reload, manual entry for drills
    run before the app was open, context tags and notes, session summary.
 3. **Done** — post-practice per-player RPE, compared against prescribed load.
-4. Analysis: weekly load, per-player trends, ACWR, monotony/strain.
+4. **Done** — analysis: drill and category totals, game-day (GD-n) buckets,
+   weekly load, per-player trends, ACWR, monotony.
 5. Custom fields the coach defines himself, folded into the comparisons.

@@ -611,12 +611,120 @@ let threw = false;
 try { await db.importAll({ format: 'something-else' }); } catch (e) { threw = true; }
 ok('a foreign file is rejected', threw);
 
-/* ---- analysis placeholder still renders ---- */
+/* ---- analysis ----------------------------------------------------------
+ * The screen is drill-first and day-first by design, so these check that the
+ * drills and the game-day countdown actually reach the page — and, more
+ * importantly, that nothing on it quietly presents an incomplete total as a
+ * light week. */
 
 root = newRoot();
 await analysis.render(root);
 await flush();
+
 contains('analysis screen renders', root, 'Analysis');
+contains('it states what the numbers are up front', root, 'Prescribed load');
+contains('the week panel is there', root, 'Last 7 days');
+contains('so is monotony', root, 'Monotony');
+contains('and the acute:chronic ratio', root, 'Acute:chronic');
+
+/* He asked for an early ACWR reading. One week of history cannot give one:
+ * the acute and chronic windows are the same days, so it would read 1.00
+ * whatever he did. The screen has to say that rather than print the 1.00. */
+contains('a week of history explains itself instead of printing 1.00', root, 'would be 1.00');
+ok('and no confident ratio is shown yet',
+  root.textContent.indexOf('In line with recent weeks') === -1);
+
+contains('the drill table is there', root, 'Your drills');
+contains('and lists a drill by name', root, 'Dynamic warm-up');
+contains('load is attributed by category', root, 'Where the load went');
+contains('the squad table is there', root, 'The squad');
+contains('contact minutes are counted separately', root, 'Contact');
+contains('movement totals appear', root, 'Jumping');
+
+/* The honesty rules, on a screen where breaking them is most dangerous. */
+contains('an untagged drill is admitted, not counted as zero', root, 'not in those movement totals');
+contains('AU are not comparable between tissues', root, 'NOT comparable between tissues');
+contains('and load is not what the body did', root, 'Compared against the squad median');
+
+/* ---- game days ---- */
+
+contains('with no game recorded, the panel says how to record one', root, 'No games recorded yet');
+contains('and explains it needs no drills', root, 'set Type to Game');
+
+const gameSession = makeSession({
+  date: '2026-08-19', type: 'Game', label: 'Away at Partizan',
+  status: 'complete', rosterIds: session.rosterIds,
+});
+await db.put(db.STORES.sessions, gameSession);
+
+root = newRoot();
+await analysis.render(root);
+await flush();
+
+contains('a session typed Game needs no new field to count', root, 'Days around a game');
+contains('the day before it is labelled GD-1', root, 'GD-1');
+ok('and the no-games message is gone',
+  root.textContent.indexOf('No games recorded yet') === -1);
+contains('a bucket built on one day says so', root, 'fewer than three days');
+contains('a 0 AU game day is explained, not left to imply games are free',
+  root, 'not what a game costs');
+contains('and the totals admit they exclude games', root, 'missing the games');
+contains('rest days are counted, not dropped', root, 'a rest day before a game is a decision');
+contains('average drill length is explained as per run', root, 'not the length of the session');
+
+/* ---- an unrated drill must not read as a light week ---- */
+
+const ghost = makeBlock({
+  sessionId: session.id, drillId: null, drillName: 'Drill Ivan sprang on me',
+  intensity: null, unrated: true, running: false, elapsedMs: 25 * 60000,
+  createdAt: '2026-08-18T11:00:00.000Z',
+});
+await db.put(db.STORES.blocks, ghost);
+
+root = newRoot();
+await analysis.render(root);
+await flush();
+
+contains('an unrated drill is reported at window level', root, 'no intensity behind it');
+contains('and the totals are called incomplete, not low', root, 'incomplete, not low');
+contains('the unrated run still shows in the drill table', root, 'Drill Ivan sprang on me');
+contains('flagged as unrated there too', root, '1 unrated');
+
+/* ---- tapping a drill opens its history ---- */
+
+const drillRowA = root.querySelectorAll('tr').filter((r) => r.textContent.indexOf('Dynamic warm-up') !== -1)[0];
+ok('a drill row is tappable', !!drillRowA);
+if (drillRowA) {
+  drillRowA.click();
+  await flush();
+  const dm = document.body.querySelectorAll('.modal')[0];
+  ok('the drill history opens', !!dm);
+  if (dm) {
+    contains('it shows every run', dm, 'Every run');
+    contains('and how long it usually lasts', dm, 'Average length');
+    contains('an untagged drill admits it', dm, 'No movement tags');
+  }
+  document.body.querySelectorAll('.scrim').forEach((n) => n.remove());
+}
+
+/* ---- tapping a player opens their trend ---- */
+
+const playerRow = root.querySelectorAll('tr').filter((r) => r.textContent.indexOf('Marko Jokic') !== -1)[0];
+ok('a player row is tappable', !!playerRow);
+if (playerRow) {
+  playerRow.click();
+  await flush();
+  const pm = document.body.querySelectorAll('.modal')[0];
+  ok('the player view opens', !!pm);
+  if (pm) {
+    contains('it shows their day by day', pm, 'Day by day');
+    contains('and repeats what the number is not', pm, 'not what his body did');
+  }
+  document.body.querySelectorAll('.scrim').forEach((n) => n.remove());
+}
+
+await db.remove(db.STORES.blocks, ghost.id);
+await db.remove(db.STORES.sessions, gameSession.id);
 
 /* ---- the offline shell must list every module the app imports ----
  * A file missing here loads fine on wifi and fails in a gym with none — the
@@ -643,7 +751,7 @@ contains('analysis screen renders', root, 'Analysis');
   // Every module js/ actually contains must be in that list.
   const modules = swList.filter((u) => u.indexOf('./js/') === 0);
   const onDisk = [
-    'app', 'db', 'models', 'load', 'ui', 'components',
+    'app', 'db', 'models', 'load', 'history', 'ui', 'components',
   ].map((n) => `./js/${n}.js`).concat(
     ['practice', 'drills', 'roster', 'analysis', 'settings', 'rpe']
       .map((n) => `./js/views/${n}.js`));

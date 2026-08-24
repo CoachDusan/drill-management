@@ -359,6 +359,10 @@ export function makeBlock(fields = {}) {
     sessionId: null,
     drillId: null,
     drillName: '',           // snapshot, so renaming a drill never rewrites history
+    category: null,          // snapshot too: re-filing a drill in the library
+                             // must not rewrite what last November's practices
+                             // were made of. Null on runs recorded before this
+                             // existed, which fall back to the library.
     intensity: 5,            // snapshot, adjustable in the moment
     tissue: { jump: null, sprint: null, cod: null }, // snapshot too
     contact: true,           // snapshot: was this contested?

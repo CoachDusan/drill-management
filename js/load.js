@@ -450,6 +450,25 @@ export function acwrSeries(series, { acuteDays = 7, chronicDays = 28 } = {}) {
     const chronic = chronicTotal / (chronicDays / acuteDays); // 28-day total scaled to a 7-day equivalent
 
     const sufficient = i >= chronicDays - 1 && chronic > 0;
+
+    /* An early, explicitly provisional reading, for the weeks before the real
+     * one is available. Asked for deliberately, with the caveat understood.
+     *
+     * It divides by the days that actually EXIST rather than by 28 — dividing
+     * a 10-day total by four would understate chronic load and invent a spike
+     * out of nothing.
+     *
+     * It stays null for the first seven days, and that is arithmetic, not
+     * caution: until there is more history than the acute window itself, the
+     * two windows are the same days and the ratio is 1.00 by construction. A
+     * number that can only be 1.00 is not an early reading of anything.
+     */
+    const daysOfHistory = i + 1;
+    const provisionalChronic = chronicWindow.length
+      ? chronicTotal / (chronicWindow.length / acuteDays)
+      : 0;
+    const canBeProvisional = daysOfHistory > acuteDays && provisionalChronic > 0;
+
     return {
       date: point.date,
       load: point.load,
@@ -457,8 +476,25 @@ export function acwrSeries(series, { acuteDays = 7, chronicDays = 28 } = {}) {
       chronic,
       acwr: sufficient ? acute / chronic : null,
       sufficient,
+      daysOfHistory,
+      daysUntilReliable: Math.max(0, chronicDays - daysOfHistory),
+      provisional: sufficient ? null : (canBeProvisional ? acute / provisionalChronic : null),
     };
   });
+}
+
+/**
+ * How much weight the early number deserves. Separate from acwrFlag on
+ * purpose: the wording has to carry the fact that it is built on part of a
+ * window, every time it is shown, not once in a footnote.
+ */
+export function provisionalNote(daysOfHistory, chronicDays = 28) {
+  const left = Math.max(0, chronicDays - daysOfHistory);
+  if (left <= 0) return null;
+  if (daysOfHistory <= 7) {
+    return `Only ${daysOfHistory} day${daysOfHistory === 1 ? '' : 's'} of history. Too few to compare a week against anything \u2014 the ratio would be 1.00 whatever you did. ${left} more days.`;
+  }
+  return `Provisional: built on ${daysOfHistory} days, not 28. It compares this week against a short and probably unrepresentative baseline, so treat it as a direction, not a number. Reliable in ${left} more days.`;
 }
 
 /**

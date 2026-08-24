@@ -383,3 +383,44 @@ tbody tr:last-child td { border-bottom: none; }
 .util input[type=search] { flex: 1; min-width: 170px; }
 .spacer { flex: 1; }
 .hidden { display: none !important; }
+
+/* ---- analysis charts --------------------------------------------------
+ * Plain flexbox bars rather than SVG: they scale to any tablet width without
+ * distorting, need no library, and stay readable in dark mode. */
+
+.chart { display: flex; align-items: flex-end; gap: 2px; height: 118px; }
+.bar-slot { flex: 1 1 0; min-width: 3px; height: 100%; display: flex; align-items: flex-end; }
+.bar {
+  width: 100%; min-height: 0; border-radius: 3px 3px 0 0;
+  background: var(--accent); cursor: pointer; transition: opacity .12s;
+}
+.bar:active { opacity: .6; }
+.bar.zero { min-height: 2px; background: var(--line); border-radius: 2px; }
+/* A game day is not a training day and must not read as one. */
+.bar.game { background: var(--i5); }
+/* Striped = this day contains drills with no intensity, so the bar is short
+   for a reason that is not "an easy day". */
+.bar.partial {
+  background-image: repeating-linear-gradient(45deg,
+    rgba(255,255,255,.45) 0 3px, transparent 3px 7px);
+}
+.chart-axis {
+  display: flex; align-items: baseline;
+  font-size: 12px; color: var(--text-3); margin-top: 5px;
+}
+
+.meter {
+  background: var(--surface-2); border-radius: 999px;
+  height: 10px; min-width: 60px; overflow: hidden;
+}
+.meter-fill { height: 100%; background: var(--accent); border-radius: 999px; }
+.meter-fill.game { background: var(--i5); }
+
+.mix-row { display: flex; align-items: center; gap: 11px; padding: 6px 0; }
+.mix-row .mix-label { flex: 0 0 150px; font-size: 14px; }
+.mix-row .meter { flex: 1; }
+.mix-row .mix-val { flex: 0 0 44px; text-align: right; font-weight: 650; font-size: 14px; }
+
+@media (max-width: 720px) {
+  .mix-row .mix-label { flex-basis: 108px; font-size: 13px; }
+}

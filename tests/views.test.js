@@ -11,6 +11,7 @@ import { document, flush, runTimers, resetDatabases } from './harness.js';
 
 const db = await import('../js/db.js');
 const { makeDrill, makePlayer } = await import('../js/models.js');
+const { blockLoad } = await import('../js/load.js');
 const drills = await import('../js/views/drills.js');
 const roster = await import('../js/views/roster.js');
 const practice = await import('../js/views/practice.js');
@@ -420,6 +421,65 @@ if (editor) {
   contains('sprinting is tied to a tissue', editor, 'Hamstrings');
   contains('change of direction is tied to a tissue', editor, 'Ankles and groin');
   document.body.querySelectorAll('.scrim').forEach((n) => n.remove());
+}
+
+/* ---- rating a courtside drill afterwards feeds the practice ----
+ * The coach adds a drill mid-practice and rates it during or after. If the
+ * rating did not travel back to the run, the session would stay permanently
+ * incomplete and "rate it later" would be a dead end. */
+{
+  const lateDrill = makeDrill({ name: 'Spanish 5v5', unrated: true, intensity: null });
+  await db.put(db.STORES.drills, lateDrill);
+
+  const lateRun = makeBlock({
+    sessionId: session.id, drillId: lateDrill.id, drillName: lateDrill.name,
+    intensity: null, unrated: true, elapsedMs: 12 * 60000,
+    endedAt: new Date().toISOString(),
+  });
+  // A run of the SAME drill that already carries a number, to prove history
+  // is not rewritten underneath the coach.
+  const settledRun = makeBlock({
+    sessionId: session.id, drillId: lateDrill.id, drillName: lateDrill.name,
+    intensity: 9.9, unrated: false, elapsedMs: 5 * 60000,
+    endedAt: new Date().toISOString(),
+  });
+  await db.put(db.STORES.blocks, lateRun);
+  await db.put(db.STORES.blocks, settledRun);
+
+  ok('before rating, the run has no load at all', blockLoad(lateRun) === null);
+
+  root = newRoot();
+  await drills.render(root);
+  await flush();
+  contains('the library asks for a rating', root, 'not rated yet');
+
+  const rateBtn = root.querySelectorAll('button')
+    .filter((b) => b.textContent.indexOf('Spanish 5v5') !== -1)[0];
+  ok('a one-tap rate button is offered', !!rateBtn);
+  if (rateBtn) {
+    rateBtn.click();
+    await flush();
+    const modal = document.body.querySelectorAll('.modal')[0];
+    const save = document.body.querySelectorAll('button')
+      .filter((b) => b.textContent.indexOf('Save changes') !== -1)[0];
+    ok('the drill editor opens on it', !!modal);
+    if (save) { save.click(); await flush(); }
+
+    const filled = await db.get(db.STORES.blocks, lateRun.id);
+    ok('the practice run picks the rating up', filled && filled.intensity !== null,
+      String(filled && filled.intensity));
+    ok('and is no longer flagged unrated', filled && !filled.unrated);
+    ok('so it finally has a load', blockLoad(filled) !== null);
+
+    const untouched = await db.get(db.STORES.blocks, settledRun.id);
+    ok('a run that already had a number is left alone',
+      untouched && Math.abs(untouched.intensity - 9.9) < 0.001,
+      String(untouched && untouched.intensity));
+  }
+  document.body.querySelectorAll('.scrim').forEach((n) => n.remove());
+  await db.remove(db.STORES.blocks, lateRun.id);
+  await db.remove(db.STORES.blocks, settledRun.id);
+  await db.remove(db.STORES.drills, lateDrill.id);
 }
 
 /* ---- a finished session reports movement, and admits what it cannot ---- */

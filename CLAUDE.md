@@ -361,6 +361,22 @@ The rest, and why:
   library. Another coach springs drills on him that were never entered, and
   making him stop and rate one is how data collection dies. It starts on one
   tap and is rated after practice.
+- **A late rating travels back to the practice.** He rates a courtside drill
+  during or after that session, so the run has to pick the number up —
+  otherwise the session stays permanently incomplete and "rate it later" is a
+  dead end. Saving a rating fills in every run of that drill still flagged
+  `unrated`, and says how many it touched.
+
+  This does **not** contradict *snapshots over references*. A snapshot protects
+  what a practice meant; a run that was never rated has nothing to protect —
+  the field is blank, not different. Runs that already carry a number, including
+  one the coach adjusted by hand for that day, are never touched.
+  `tests/views.test.js` asserts both halves, and both were checked to fail when
+  deliberately broken.
+
+  Done with an in-memory scan rather than a `drillId` index: an index means a
+  schema version bump, and the tablet is already carrying real data.
+
 - **Unrated therefore had to mean `null`, not `0`.** `blockLoad()` returns null
   for a drill with no intensity and `loadCoverage()` reports what fraction of a
   session is missing — same rule as an untimed clock and an untagged movement

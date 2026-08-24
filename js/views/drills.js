@@ -39,6 +39,23 @@ export async function render(root) {
   } else if (!visible.length) {
     body.appendChild(emptyState('🔍', 'Nothing matches', 'Try a different search, or clear it to see the whole library.'));
   } else {
+    // Drills added courtside carry no rating at all, so their load is missing
+    // outright — a bigger hole than missing movement tags, and listed first.
+    const unrated = drills.filter((d) => !d.archived && d.unrated);
+    if (unrated.length) {
+      body.appendChild(h('div', { class: 'note warn' }, [
+        h('div', {}, [
+          h('strong', { text: `${unrated.length} drill${unrated.length === 1 ? '' : 's'} added during practice, not rated yet. ` }),
+          'Every practice these appear in is counted as incomplete until they have an intensity — the load is unknown, not zero.',
+        ]),
+        h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '7px', marginTop: '10px' } },
+          unrated.map((d) => h('button', {
+            class: 'btn btn-sm btn-primary',
+            onclick: () => editDrill(d, root),
+          }, `Rate “${d.name}”`))),
+      ]));
+    }
+
     const untagged = drills.filter((d) => !d.archived && !hasTissueTags(d));
     if (untagged.length) {
       body.appendChild(h('div', { class: 'note warn' }, [
@@ -110,6 +127,7 @@ function drillRow(d, root) {
         d.name,
         d.archived ? h('span', { class: 'chip', style: { marginLeft: '8px' }, text: 'archived' }) : null,
         d.intensityMode === 'measured' ? h('span', { class: 'chip on', style: { marginLeft: '8px' }, text: 'measured' }) : null,
+        d.unrated ? h('span', { class: 'chip', style: { marginLeft: '8px', color: 'var(--watch)' }, text: 'needs rating' }) : null,
       ]),
       h('div', { class: 'tiny', text: `${info.label}${d.typicalMinutes ? ` · usually ${d.typicalMinutes} min` : ''}${typicalLoad ? ` · ~${typicalLoad} AU` : ''}` }),
       tagged
@@ -195,7 +213,8 @@ export async function editDrill(existing, root) {
       field('Drill name', name),
       h('div', { class: 'form-row' }, [
         field('Category', cat),
-        field('Typical length (minutes)', mins, 'Just a default — the stopwatch is what counts.'),
+        field('Typical length (minutes)', mins,
+          'Total time start to stop, not live ball time. Only used to pre-fill a manual entry — during practice the stopwatch is what counts.'),
       ]),
       newCat,
 
@@ -253,6 +272,7 @@ export async function editDrill(existing, root) {
       // Keep the flat number in sync so nothing downstream has to know how it
       // was arrived at.
       next.intensity = mode === 'manual' ? manual.getValue() : resolveIntensity(next);
+      next.unrated = false;   // saving the form is the rating
       done(next);
     };
   }, { confirmLabel: existing ? 'Save changes' : 'Add drill' });

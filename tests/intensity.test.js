@@ -212,5 +212,21 @@ ok(`the grid rarely ranks a lighter drill above a harder one (${inversions} bad 
 
 print(`fit: R-squared ${r2.toFixed(3)}, mean error ${mae.toFixed(2)}, worst ${worst.toFixed(2)} (${worstName})`);
 }
+/* ---- the 5v5 / 5v0 flat spot -------------------------------------------
+ * The coach reported this as a bug: a 5v5 and a 5v0 score identically. It is
+ * real, and it is deliberate. The situation scale bottoms out at 5v5, so the
+ * no-defence adjustment has nowhere to drop. His own club's matched pair
+ * (5v5 FC 5.75 vs 5v0 FC 5.50, same court and rhythm) differ by 0.25 — inside
+ * the grid's own error. Forcing them apart made the fit worse, so it stays.
+ * If someone "fixes" it later, these tests should stop them. */
+eq('5v5 and 5v0 deliberately resolve the same',
+   deriveIntensity(5, 1, 5, true), deriveIntensity(5, 1, 5, false));
+
+ok('but fewer players unopposed still rates lower than contested',
+   deriveIntensity(5, 3, 5, false) < deriveIntensity(5, 3, 5, true));
+
+ok('rhythm is the lever that separates a continuous 5v5 from a stop-start one',
+   deriveIntensity(5, 1, 5, true) - deriveIntensity(5, 1, 2, true) > 1.5);
+
 print(`${pass} passed, ${fail} failed`);
 if (fail) throw new Error(`${fail} test(s) failed`);

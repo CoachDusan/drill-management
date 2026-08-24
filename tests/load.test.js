@@ -10,7 +10,7 @@ import {
   sessionLiveMinutesByPlayer, fmtDensity,
   blockLoad, blockMinutes, participationOf, playerBlockLoad,
   sessionLoadByPlayer, sessionMinutesByPlayer, sessionTeamLoad,
-  sRPELoad, dailySeries, acwrSeries, monotonySeries, weekOverWeek,
+  loadCoverage, sRPELoad, dailySeries, acwrSeries, monotonySeries, weekOverWeek,
   acwrFlag, monotonyFlag, fmtClock,
 } from '../js/load.js';
 import { addDays } from '../js/models.js';
@@ -195,6 +195,27 @@ ok('density falls as an unfinished drill keeps running',
 eq('clock under an hour', fmtClock(9 * 60000 + 5000), '9:05');
 eq('clock over an hour', fmtClock(3 * 3600000 + 4 * 60000 + 9000), '3:04:09');
 eq('zero clock', fmtClock(0), '0:00');
+
+/* ---- a drill added courtside and not yet rated -------------------------
+ * Same rule as an untimed clock and an untagged movement profile: unknown is
+ * not zero. A 0 here would shrink the day and make a real spike read as a
+ * quiet week. */
+{
+  const rated   = { intensity: 7, elapsedMs: 10 * 60000, participation: {} };
+  const unrated = { intensity: null, elapsedMs: 10 * 60000, participation: {} };
+
+  eq('an unrated drill has no load, not zero load', blockLoad(unrated), null);
+  eq('a rated one is unaffected', blockLoad(rated), 70);
+  eq('per-player load of an unrated drill is null too',
+     playerBlockLoad(unrated, 'p1'), null);
+
+  const cov = loadCoverage([rated, unrated]);
+  eq('coverage counts the rated half', Math.round(cov.fraction * 100), 50);
+  eq('and names what is missing', cov.unrated.length, 1);
+
+  const full = loadCoverage([rated]);
+  eq('a fully rated session reports complete coverage', full.fraction, 1);
+}
 
 print(`\n${pass} passed, ${fail} failed`);
 if (fail) throw new Error(`${fail} test(s) failed`);

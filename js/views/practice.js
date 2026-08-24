@@ -10,13 +10,13 @@
 
 import * as db from '../db.js';
 import {
-  makeSession, makeBlock, toDateKey, formatDate, intensityInfo,
-  resolveIntensity, TISSUE,
+  makeSession, makeBlock, makeDrill, toDateKey, formatDate, intensityInfo,
+  resolveIntensity, TISSUE, DEFAULT_GROUPS,
 } from '../models.js';
 import {
   blockMinutes, blockLoad, sessionTeamLoad, sessionTeamMinutes,
   sessionLoadByPlayer, blockTissue, tissueCoverage, contactShare,
-  blockLiveDensity, blockLiveMinutes, sessionLiveDensity,
+  blockLiveDensity, blockLiveMinutes, sessionLiveDensity, loadCoverage,
   fmtLoad, fmtClock, fmtMinutes, fmtDensity,
 } from '../load.js';
 import {
@@ -40,7 +40,10 @@ async function allTags() {
   return [...QUICK_TAGS, ...custom.filter((t) => !QUICK_TAGS.includes(t))];
 }
 
-const GROUP_PRESETS = ['Team', 'Bigs', 'Guards', 'Wings', 'Group A', 'Group B', 'Starters', 'Bench'];
+/* The coach's own split, loaded from Settings. He works smalls against bigs,
+ * in two groups — the guards / wings / bigs split this shipped with was a guess
+ * by someone not in that gym. Same rule as tags and categories. */
+let GROUP_PRESETS = DEFAULT_GROUPS.slice();
 
 let rootEl = null;
 let ticker = null;
@@ -53,6 +56,8 @@ export function teardown() {
 export async function render(root) {
   rootEl = root;
   teardown();
+
+  GROUP_PRESETS = await db.getMeta('groups', DEFAULT_GROUPS);
 
   const sessions = await db.getAll(db.STORES.sessions);
   const live = sessions.find((s) => s.status === 'live');
@@ -540,8 +545,29 @@ async function addBlock(session, drills, roster) {
       list.innerHTML = '';
       const matches = available.filter((d) => !search
         || `${d.name} ${d.category}`.toLowerCase().includes(search.toLowerCase()));
+      // A coach can spring a drill on him that was never entered. Typing its
+      // name and starting it has to cost one tap — rating it can wait until
+      // after practice, because friction courtside is how data collection dies.
+      const typed = search.trim();
+      if (typed && !available.some((d) => d.name.toLowerCase() === typed.toLowerCase())) {
+        list.appendChild(h('div', {
+          class: 'row clickable',
+          style: { borderLeft: '3px solid var(--accent, #2f6fdb)' },
+          onclick: () => done({ newName: typed, group, mode: 'new' }),
+        }, [
+          h('span', { class: 'chip', text: 'new' }),
+          h('div', { class: 'grow' }, [
+            h('div', { class: 'name', text: `Start “${typed}”` }),
+            h('div', { class: 'tiny', text: 'Added to the library, rated after practice' }),
+          ]),
+          h('span', { class: 'tiny', text: 'Start ›' }),
+        ]));
+      }
+
       if (!matches.length) {
-        list.appendChild(h('div', { class: 'tiny', style: { padding: '14px' }, text: 'No drills match that search.' }));
+        if (!typed) {
+          list.appendChild(h('div', { class: 'tiny', style: { padding: '14px' }, text: 'No drills yet.' }));
+        }
         return;
       }
       matches.forEach((d) => {
@@ -581,6 +607,29 @@ async function addBlock(session, drills, roster) {
   if (!result) return;
 
   if (result.mode === 'manual') return manualBlock(session, available, result.group, roster);
+
+  // Unrated on purpose: no intensity, so its load is null rather than a
+  // made-up number. The session summary counts what is still missing.
+  if (result.mode === 'new') {
+    const drill = makeDrill({ name: result.newName, unrated: true, intensity: null });
+    await db.put(db.STORES.drills, drill);
+    const blk = makeBlock({
+      sessionId: session.id,
+      drillId: drill.id,
+      drillName: drill.name,
+      intensity: null,
+      unrated: true,
+      group: result.group,
+      startedAt: new Date().toISOString(),
+      running: true,
+      lastResumedAt: new Date().toISOString(),
+      participation: {},
+    });
+    await db.put(db.STORES.blocks, blk);
+    liveBlocks.set(blk.id, blk);
+    toast(`${drill.name} started — rate it after practice`);
+    return render(rootEl);
+  }
 
   const d = result.drill;
   const block = makeBlock({
@@ -827,6 +876,62 @@ async function editParticipation(block, session, roster) {
   await render(rootEl);
 }
 
+/** Wrong drill tapped. Re-point this run at another one and re-take the
+ *  snapshot — name, intensity and movement tags all travel with the drill, so
+ *  all three have to be replaced together or the run would keep the old
+ *  intensity under a new name. Timings, notes and who was in are untouched. */
+async function swapDrill(block, session, roster) {
+  const drills = (await db.getAll(db.STORES.drills))
+    .filter((d) => !d.archived && d.id !== block.drillId)
+    .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+
+  const picked = await openModal(`Change drill — ${block.drillName}`, (body, done) => {
+    let q = '';
+    const list = h('div', { class: 'list' });
+    function paint() {
+      list.innerHTML = '';
+      drills
+        .filter((d) => !q || `${d.name} ${d.category}`.toLowerCase().includes(q.toLowerCase()))
+        .forEach((d) => list.appendChild(h('div', {
+          class: 'row clickable',
+          onclick: () => done({ drill: d }),
+        }, [
+          intensityBadge(resolveIntensity(d)),
+          h('div', { class: 'grow' }, [
+            h('div', { class: 'name', text: d.name }),
+            h('div', { class: 'tiny', text: d.category }),
+          ]),
+        ])));
+    }
+    paint();
+    body.append(
+      h('p', { class: 'tiny', style: { marginTop: 0 } },
+        'The clock, the notes and who was in all stay as they are. Only the drill changes.'),
+      h('input', {
+        type: 'search', placeholder: 'Search drills…',
+        oninput: (e) => { q = e.target.value; paint(); },
+      }),
+      list,
+    );
+    return null;
+  }, { cancelLabel: 'Cancel', wide: true });
+
+  if (!picked || !picked.drill) return;
+  const d = picked.drill;
+  const fresh = await db.get(db.STORES.blocks, block.id);
+  await db.put(db.STORES.blocks, {
+    ...fresh,
+    drillId: d.id,
+    drillName: d.name,
+    intensity: resolveIntensity(d),
+    tissue: { ...(d.tissue || { jump: null, sprint: null, cod: null }) },
+    contact: d.contact !== false,
+    unrated: false,
+  });
+  toast(`Changed to ${d.name}`);
+  return render(rootEl);
+}
+
 /** Fix a finished drill: duration, intensity, group, or delete it. */
 async function editBlock(block, session, roster) {
   const fresh = await db.get(db.STORES.blocks, block.id);
@@ -835,7 +940,14 @@ async function editBlock(block, session, roster) {
   const result = await openModal(fresh.drillName, (body, done) => {
     const minutes = numberInput(Math.round(blockMinutes(fresh) * 10) / 10, { min: 0, step: '0.1' });
     const group = selectInput(GROUP_PRESETS, fresh.group || 'Team');
-    const picker = intensityPicker(fresh.intensity);
+    const picker = intensityPicker(fresh.intensity === null || fresh.intensity === undefined ? 5 : fresh.intensity);
+
+    // What happened, in his words: "till 7", "Marko rolled an ankle", why it
+    // ran long. The field was already on the record and simply never shown.
+    const note = h('textarea', {
+      rows: '2',
+      placeholder: 'e.g. played to 7 · ran long · stopped early, tight hamstring',
+    }, fresh.note || '');
 
     body.append(
       h('div', { class: 'form-row' }, [
@@ -847,10 +959,17 @@ async function editBlock(block, session, roster) {
         picker,
       ]),
       h('div', { class: 'note' },
-        'Changing the intensity here affects only this one run. The drill library keeps its own rating.'),
+        fresh.unrated
+          ? 'This drill was added courtside and has no rating yet. Until it gets one its load is counted as unknown, not as zero.'
+          : 'Changing the intensity here affects only this one run. The drill library keeps its own rating.'),
+      h('label', { class: 'field' }, [
+        h('span', { class: 'lbl', text: 'Notes' }),
+        note,
+      ]),
       h('div', { class: 'btn-row' }, [
         h('button', { class: 'btn btn-sm', onclick: () => done({ __action: 'live' }) }, 'Live time'),
         h('button', { class: 'btn btn-sm', onclick: () => done({ __action: 'participation' }) }, 'Who’s in'),
+        h('button', { class: 'btn btn-sm', onclick: () => done({ __action: 'swap' }) }, 'Change drill'),
         h('button', { class: 'btn btn-sm', onclick: () => done({ __action: 'resume' }) }, 'Resume clock'),
         h('button', { class: 'btn btn-sm btn-danger', onclick: () => done({ __action: 'delete' }) }, 'Delete'),
       ]),
@@ -860,6 +979,8 @@ async function editBlock(block, session, roster) {
       elapsedMs: Math.max(0, Number(minutes.value) || 0) * 60000,
       group: group.value,
       intensity: picker.getValue(),
+      unrated: false,   // he has now put a number on it
+      note: note.value.trim(),
     });
   }, { confirmLabel: 'Save' });
 
@@ -867,6 +988,7 @@ async function editBlock(block, session, roster) {
 
   if (result.__action === 'live') { await promptLiveTime(fresh); return render(rootEl); }
   if (result.__action === 'participation') return editParticipation(fresh, session, roster);
+  if (result.__action === 'swap') return swapDrill(fresh, session, roster);
   if (result.__action === 'resume') return resumeBlock(fresh);
   if (result.__action === 'delete') {
     const ok = await confirmDanger('Delete this drill run?', `${fresh.drillName} will be removed from this practice.`, 'Delete');
@@ -966,6 +1088,67 @@ function tissueSummaryBlock(blocks) {
   return wrap;
 }
 
+/** How much of this session has no intensity behind it yet. Silence here is
+ *  the dangerous case: a coach who does not know a third of his session went
+ *  uncounted will read a real spike as a quiet week. */
+function unratedNote(blocks) {
+  const cov = loadCoverage(blocks);
+  if (cov.fraction >= 1) return null;
+  const missing = Math.round((1 - cov.fraction) * 100);
+  return h('div', { class: 'note', style: { marginBottom: '10px' } }, [
+    h('strong', { text: `${cov.unrated.length} drill${cov.unrated.length === 1 ? '' : 's'} still unrated` }),
+    ` — ${missing}% of this session's court time has no intensity behind it, so the load below is `,
+    h('strong', { text: 'incomplete, not low' }),
+    '. Tap the drill to rate it.',
+  ]);
+}
+
+/** Correct who trained, after the fact. */
+async function editSessionRoster(session) {
+  const players = await db.getAll(db.STORES.players);
+  const active = players.filter((p) => p.status === 'active');
+  const chosen = new Set(session.rosterIds || []);
+
+  const result = await openModal('Who trained?', (body, done) => {
+    const list = h('div', { class: 'list' }, active.map((p) => {
+      const row = h('div', {
+        class: 'row clickable',
+        onclick: () => {
+          if (chosen.has(p.id)) chosen.delete(p.id); else chosen.add(p.id);
+          paint(row, chosen.has(p.id));
+        },
+      }, [
+        h('div', { class: 'grow' }, [
+          h('div', { class: 'name', text: `${p.number ? `#${p.number} ` : ''}${p.name}` }),
+        ]),
+        h('span', { class: 'chip' }),
+      ]);
+      paint(row, chosen.has(p.id));
+      return row;
+    }));
+
+    function paint(row, on) {
+      const chip = row.querySelector('.chip');
+      chip.textContent = on ? 'Trained' : 'Did not';
+      chip.className = on ? 'chip on' : 'chip';
+      row.style.opacity = on ? '1' : '.55';
+    }
+
+    body.append(
+      h('p', { class: 'tiny', style: { marginTop: 0 } },
+        'Adding someone gives them every drill in this practice unless you mark them out of one. Removing someone drops this session from their history.'),
+      list,
+    );
+    return () => done({ rosterIds: [...chosen] });
+  }, { confirmLabel: 'Save' });
+
+  if (!result) return;
+  const fresh = await db.get(db.STORES.sessions, session.id);
+  await db.put(db.STORES.sessions, { ...fresh, rosterIds: result.rosterIds });
+  toast('Roster updated');
+  await render(rootEl);
+}
+
 async function openSessionSummary(session) {
   const [players, blocks] = await Promise.all([
     db.getAll(db.STORES.players),
@@ -1002,6 +1185,8 @@ async function openSessionSummary(session) {
 
       liveNote(ordered),
 
+      unratedNote(ordered),
+
       contextSlot,
 
       h('h3', { text: 'Drills' }),
@@ -1012,16 +1197,22 @@ async function openSessionSummary(session) {
             h('th', { class: 'num', text: 'Min' }), h('th', { class: 'num', text: 'Live' }),
             h('th', { class: 'num', text: 'Int' }), h('th', { class: 'num', text: 'AU' }),
           ])),
-          h('tbody', {}, ordered.map((b) => h('tr', {}, [
+          h('tbody', {}, ordered.map((b) => h('tr', {
+            class: 'clickable',
+            title: 'Edit this drill run',
+            onclick: () => done({ __action: 'editBlock', blockId: b.id }),
+          }, [
             h('td', {}, [
               b.drillName,
               b.contact === false ? h('span', { class: 'chip', style: { marginLeft: '7px' }, text: 'no D' }) : null,
+              b.unrated ? h('span', { class: 'chip', style: { marginLeft: '7px' }, text: 'unrated' }) : null,
+              b.note ? h('div', { class: 'tiny', text: b.note }) : null,
             ]),
             h('td', { class: 'tiny', text: b.group || 'Team' }),
             h('td', { class: 'num', text: fmtMinutes(blockMinutes(b)) }),
             h('td', { class: 'num', text: fmtDensity(blockLiveDensity(b)) }),
-            h('td', { class: 'num', text: String(b.intensity) }),
-            h('td', { class: 'num', text: fmtLoad(blockLoad(b)) }),
+            h('td', { class: 'num', text: b.intensity === null || b.intensity === undefined ? '—' : String(b.intensity) }),
+            h('td', { class: 'num', text: blockLoad(b) === null ? '—' : fmtLoad(blockLoad(b)) }),
           ]))),
         ]),
       ]),
@@ -1043,11 +1234,27 @@ async function openSessionSummary(session) {
       ]),
 
       h('div', { class: 'btn-row', style: { marginTop: '18px' } }, [
+        h('button', { class: 'btn btn-sm', onclick: () => done({ __action: 'roster' }) }, 'Edit who trained'),
         h('button', { class: 'btn btn-sm btn-danger', onclick: () => done({ __action: 'delete' }) }, 'Delete session'),
       ]),
+      h('p', { class: 'tiny', style: { marginTop: '6px' } },
+        'Tap any drill above to fix its length, intensity, group, notes, or which drill it was.'),
     );
     return null;
   }, { cancelLabel: 'Close', wide: true }).then(async (res) => {
+    if (res && res.__action === 'editBlock') {
+      const blk = await db.get(db.STORES.blocks, res.blockId);
+      if (blk) await editBlock(blk, session, roster);
+      const again = await db.get(db.STORES.sessions, session.id);
+      if (again) await openSessionSummary(again);
+      return;
+    }
+    if (res && res.__action === 'roster') {
+      await editSessionRoster(session);
+      const again = await db.get(db.STORES.sessions, session.id);
+      if (again) await openSessionSummary(again);
+      return;
+    }
     if (res && res.__action === 'delete') {
       const ok = await confirmDanger('Delete this session?',
         'The practice and every drill run in it will be permanently removed.', 'Delete');

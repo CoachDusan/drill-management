@@ -306,6 +306,78 @@ Syntax-check any module the same way: `jsc -m js/whatever.js`. A clean run means
 it parses and its imports resolve. `js/app.js` and `sw.js` will report a missing
 `window` / `self` — that is expected, and means they parsed fine.
 
+## What the coach asked for after using it (2026-08-24)
+
+First real feedback from the S&C coach, after a week on the tablet. Most of it
+was UI. One item looked like a maths complaint and was not.
+
+**"5v5 and 5v0 score the same, around 7.3."** He is right, and it is deliberate.
+The situation scale bottoms out at 5v5, so the no-defence adjustment has
+nowhere to drop. Checked against the club's own matched pair — 5v5 FC 5.75 vs
+5v0 FC 5.50, same court and rhythm — the real gap is **0.25**, inside the grid's
+own error (0.46) and well inside the +/-0.64 the same drill varies by between
+runs. Letting the adjusted situation reach 0 made the fit *worse*
+(R-squared 0.937 -> 0.926). The flat spot stays; the UI now says so out loud
+instead of letting him find it and assume the app is broken.
+`tests/intensity.test.js` asserts it, so nobody "fixes" it later.
+
+**What he actually needed was the rhythm axis, which he could not reach.** His
+real example — continuous Spanish 5v5 versus a whistle-heavy scrimmage — is
+already a 3-point spread in the club's own measurements:
+
+| Rhythm | Drill | Measured |
+|---|---|---|
+| Non-stop | 5v5 scrimmage | 8.50 |
+| 3 lengths | 5v5 FC (+2-3tr.) | 6.50 |
+| 2 lengths | 5v5 FC (+1-2 trans) | 5.75 |
+| 1 length | 5v4+1 (1tr.) | 5.50 |
+
+He was rating both at non-stop because the labels were written in court lengths
+("three lengths, then stop"), which describe a rep-based drill and say nothing
+about live play stopped by a whistle. **Only the labels changed** — the levels
+and the formula are untouched, and the original court-length anchors are kept
+in the notes so the 43 imported drills still mean what they meant.
+
+He also asked for game format, contact, continuity, stoppages and work-to-rest
+as separate new inputs. Declined, for the reason already recorded under "Stop
+refining the intensity formula": his own contact/non-contact pairs move by less
+than the noise, and adding factors on n=27 with no held-out set would be
+inventing effects the measurements do not support. The escape hatch remains
+per-run intensity adjustment, and live density is the measured check on exactly
+the property he is describing.
+
+The rest, and why:
+
+- **Nv0 is its own option** (1v0 ... 5v0), instead of "5v5" plus a separate
+  defence toggle. Same two fields underneath, same maths — he now picks the
+  matchup the way he says it out loud.
+- **Two groups, not three.** He splits smalls against bigs. Guards / wings /
+  bigs was a guess by someone not in that gym, so groups became coach-defined
+  in Settings like tags and categories. Default is Team / Bigs / Smalls.
+- **"Typical length" said "just a default"**, which left him unsure whether to
+  enter live-ball time or total time. Now says total, start to stop, and that
+  it only pre-fills a manual entry.
+- **A drill can be created courtside** by typing a name that is not in the
+  library. Another coach springs drills on him that were never entered, and
+  making him stop and rate one is how data collection dies. It starts on one
+  tap and is rated after practice.
+- **Unrated therefore had to mean `null`, not `0`.** `blockLoad()` returns null
+  for a drill with no intensity and `loadCoverage()` reports what fraction of a
+  session is missing — same rule as an untimed clock and an untagged movement
+  profile. A zero would shrink the day and make a real spike read as a quiet
+  week.
+- **Notes per drill run** ("till 7", "stopped early, tight hamstring"). The
+  `note` field was already on the block record and had simply never been shown.
+  That is the fourth time the answer was "already recorded, not displayed" —
+  check before proposing a field.
+- **Change drill on a run**, for when the wrong one was tapped. Re-snapshots
+  name, intensity and movement tags together; timings, notes and participation
+  survive.
+- **A finished session is editable.** Ending a practice claimed "you can still
+  open it and correct anything afterwards" and that was not true — the summary
+  was read-only apart from Delete. Drill rows are now tappable and the roster
+  can be corrected.
+
 ## Hosting
 
 Served by GitHub Pages from `main` / root:

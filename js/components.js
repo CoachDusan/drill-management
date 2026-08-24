@@ -3,7 +3,7 @@
 import { h, field } from './ui.js';
 import {
   INTENSITY, intensityInfo, intensityBand,
-  COURT_LEVELS, SITUATION_LEVELS, RHYTHM_LEVELS, CONTACT_LEVELS,
+  COURT_LEVELS, SITUATION_OPTIONS, situationOption, RHYTHM_LEVELS,
   TISSUE, TISSUE_LEVELS, deriveIntensity,
 } from './models.js';
 
@@ -85,33 +85,50 @@ export function intensityGrid(drill, onChange) {
     },
   });
 
-  function picker(levels, value, set) {
-    const sel = h('select', {
-      onchange: (e) => { set(Number(e.target.value)); paint(); },
-    });
-    levels.forEach((l) => sel.appendChild(h('option', { value: l.value, selected: l.value === value }, l.label)));
-    sel.value = String(value);
-    return sel;
-  }
+  const courtSel = h('select', {
+    onchange: (e) => { court = Number(e.target.value); paint(); },
+  });
+  COURT_LEVELS.forEach((l) => courtSel.appendChild(
+    h('option', { value: l.value, selected: l.value === court }, l.label)));
+  courtSel.value = String(court);
 
-  const courtSel = picker(COURT_LEVELS, court, (v) => { court = v; });
-  const situationSel = picker(SITUATION_LEVELS, situation, (v) => { situation = v; });
-  const rhythmSel = picker(RHYTHM_LEVELS, rhythm, (v) => { rhythm = v; });
+  /* One picker for the matchup, the way the coach says it out loud — "3v0",
+     not "3v3 plus a defence toggle". Sets both fields underneath. */
+  const sitSel = h('select', {
+    onchange: (e) => {
+      const opt = SITUATION_OPTIONS[Number(e.target.value)];
+      situation = opt.situation; contact = opt.contact; paint();
+    },
+  });
+  SITUATION_OPTIONS.forEach((o, i) => sitSel.appendChild(h('option', {
+    value: i,
+    selected: o.situation === situation && o.contact === contact,
+  }, o.note ? `${o.label} — ${o.note.toLowerCase()}` : o.label)));
+  sitSel.value = String(SITUATION_OPTIONS.findIndex(
+    (o) => o.situation === situation && o.contact === contact));
 
-  const contactRow = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px' } });
-  function paintContact() {
-    contactRow.innerHTML = '';
-    CONTACT_LEVELS.forEach((l) => {
-      contactRow.appendChild(h('button', {
-        type: 'button',
-        class: contact === l.value ? 'btn btn-primary btn-sm' : 'btn btn-sm',
-        onclick: () => { contact = l.value; paintContact(); paint(); },
-      }, l.label));
-    });
-  }
+  const rhythmSel = h('select', {
+    onchange: (e) => { rhythm = Number(e.target.value); paint(); },
+  });
+  RHYTHM_LEVELS.forEach((l) => rhythmSel.appendChild(
+    h('option', { value: l.value, selected: l.value === rhythm }, l.label)));
+  rhythmSel.value = String(rhythm);
+
+  const rhythmNote = h('div', { class: 'tiny', style: { marginTop: '4px' } });
+  const sitNote = h('div', { class: 'tiny', style: { marginTop: '4px' } });
 
   function paint() {
     const value = deriveIntensity(court, situation, rhythm, contact);
+    const r = RHYTHM_LEVELS.find((l) => l.value === rhythm);
+    rhythmNote.textContent = r ? r.note : '';
+
+    // Say the flat spot out loud rather than letting him find it and assume
+    // the app is broken. At five players the situation scale has bottomed out,
+    // and the club's own matched pair says the real gap is about 0.25.
+    sitNote.textContent = situation === 1
+      ? '5v5 and 5v0 come out the same. The measured pair differs by 0.25 — less than this grid\u2019s own error. Use Rhythm to separate them: a non-stop 5v5 is not the same drill as one full of whistles.'
+      : (contact ? '' : 'Unopposed work rates about one level easier than the same drill contested.');
+
     readout.innerHTML = '';
     readout.append(
       intensityBadge(value),
@@ -126,18 +143,19 @@ export function intensityGrid(drill, onChange) {
   wrap.append(
     h('div', { class: 'form-row' }, [
       field('Court used', courtSel),
-      field('Game situation', situationSel),
+      h('label', { class: 'field' }, [
+        h('span', { class: 'lbl', text: 'Game situation' }),
+        sitSel,
+        sitNote,
+      ]),
     ]),
-    field('Rhythm', rhythmSel),
     h('label', { class: 'field' }, [
-      h('span', { class: 'lbl', text: 'Defence' }),
-      contactRow,
-      h('div', { class: 'tiny', style: { marginTop: '4px' },
-        text: 'Unopposed work is about one level easier than the same drill contested. Counted separately for injury exposure, because contact is where collisions and awkward landings come from.' }),
+      h('span', { class: 'lbl', text: 'Rhythm — what stops the action?' }),
+      rhythmSel,
+      rhythmNote,
     ]),
     readout,
   );
-  paintContact();
   paint();
 
   wrap.getValues = () => ({
@@ -149,10 +167,9 @@ export function intensityGrid(drill, onChange) {
 
 function describe(court, situation, rhythm, contact) {
   const c = COURT_LEVELS.find((l) => l.value === court);
-  const s = SITUATION_LEVELS.find((l) => l.value === situation);
   const r = RHYTHM_LEVELS.find((l) => l.value === rhythm);
-  const situationText = contact ? (s ? s.label : '') : `${s ? s.label.split('v')[0] : ''}v0`;
-  return `${c ? c.label : ''} · ${situationText} · ${r ? r.label.toLowerCase() : ''}`;
+  const s = situationOption(situation, contact);
+  return `${c ? c.label : ''} · ${s ? s.label : ''} · ${r ? r.label.toLowerCase() : ''}`;
 }
 
 /* ---- movement demand tags --------------------------------------------

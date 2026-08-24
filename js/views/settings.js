@@ -6,8 +6,8 @@
  */
 
 import * as db from '../db.js';
-import { h, mount, toast, confirmDanger, downloadFile, pickFile, toCSV } from '../ui.js';
-import { toDateKey, resolveIntensity } from '../models.js';
+import { h, mount, toast, confirmDanger, downloadFile, pickFile, toCSV, openModal, field, textInput } from '../ui.js';
+import { toDateKey, resolveIntensity, DEFAULT_GROUPS } from '../models.js';
 
 export async function render(root) {
   const [players, drills, sessions, blocks] = await Promise.all([
@@ -20,6 +20,7 @@ export async function render(root) {
   const askLiveTime = await db.getMeta('askLiveTime', true);
   const customTags = await db.getMeta('customTags', []);
   const customCategories = await db.getMeta('customCategories', []);
+  const groups = await db.getMeta('groups', DEFAULT_GROUPS);
   const lastBackup = await db.getMeta('lastBackupAt', null);
   const daysSince = lastBackup
     ? Math.floor((Date.now() - new Date(lastBackup).getTime()) / 86400000)
@@ -105,6 +106,38 @@ export async function render(root) {
           customTags.map((t) => removableChip(t, () => removeCustom('customTags', t, root))))
         : h('p', { class: 'tiny', style: { marginTop: 0 } },
           'None yet. Tap “+ New tag” during a practice to add one.'),
+
+      h('h3', { style: { marginTop: '18px' }, text: 'Practice groups' }),
+      h('p', { class: 'tiny', style: { marginTop: 0 } },
+        'How practice splits when it splits. “Team” is always first and costs no taps. Removing one never changes a practice already recorded.'),
+      h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '7px' } },
+        groups.filter((g) => g !== 'Team').map((g) => removableChip(g, async () => {
+          await db.setMeta('groups', groups.filter((x) => x !== g));
+          toast(`“${g}” removed from the list`);
+          await render(root);
+        }))),
+      h('button', {
+        class: 'btn btn-sm', style: { marginTop: '8px' },
+        // A real modal, not window.prompt — prompt() is unreliable inside an
+        // installed app window, which is exactly where this runs.
+        onclick: async () => {
+          const res = await openModal('New practice group', (body, done) => {
+            const input = textInput('', { placeholder: 'e.g. Smalls' });
+            body.append(field('Group name', input,
+              'What you call this split on the floor. It shows up in “Start a drill”.'));
+            return () => done({ name: input.value.trim() });
+          }, { confirmLabel: 'Add' });
+          const name = res && res.name;
+          if (!name) return;
+          if (groups.some((g) => g.toLowerCase() === name.toLowerCase())) {
+            toast('That group is already on the list');
+            return;
+          }
+          await db.setMeta('groups', [...groups, name]);
+          toast(`“${name}” added`);
+          await render(root);
+        },
+      }, '+ New group'),
 
       h('h3', { style: { marginTop: '18px' }, text: 'Drill categories' }),
       customCategories.length

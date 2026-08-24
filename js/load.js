@@ -31,9 +31,35 @@ export function blockMinutes(block) {
   return (block.elapsedMs + running) / 60000;
 }
 
-/** Team-level load for one drill run: intensity x minutes. */
+/** Team-level load for one drill run: intensity x minutes.
+ *
+ * Returns null — never 0 — for a drill that has not been rated yet. A drill
+ * added courtside and left to be rated after practice has an UNKNOWN load, and
+ * unknown is not the same as none. Returning 0 would quietly shrink the day and
+ * a real spike would read as a quiet week. Same rule as an untimed live clock
+ * and an untagged movement profile; `loadCoverage()` reports how much of a
+ * session is missing. */
 export function blockLoad(block) {
-  return block.intensity * blockMinutes(block);
+  const i = block.intensity;
+  if (i === null || i === undefined || !Number.isFinite(Number(i))) return null;
+  return Number(i) * blockMinutes(block);
+}
+
+/** How much of a session actually has an intensity behind it. */
+export function loadCoverage(blocks) {
+  let rated = 0;
+  let total = 0;
+  for (const b of blocks) {
+    const mins = blockMinutes(b);
+    total += mins;
+    if (blockLoad(b) !== null) rated += mins;
+  }
+  return {
+    ratedMinutes: rated,
+    totalMinutes: total,
+    fraction: total ? rated / total : 1,
+    unrated: blocks.filter((b) => blockLoad(b) === null),
+  };
 }
 
 /** How much of this drill a given player did: 1, 0.5, or 0. */
@@ -44,7 +70,8 @@ export function participationOf(block, playerId) {
 
 /** Load a single player accrued in a single drill run. */
 export function playerBlockLoad(block, playerId) {
-  return blockLoad(block) * participationOf(block, playerId);
+  const load = blockLoad(block);
+  return load === null ? null : load * participationOf(block, playerId);
 }
 
 /* ---- session roll-ups ------------------------------------------------ */

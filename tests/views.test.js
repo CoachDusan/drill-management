@@ -407,8 +407,11 @@ if (editor) {
   contains('the grid asks about court', editor, 'Court used');
   contains('the grid asks about the game situation', editor, 'Game situation');
   contains('the grid asks about rhythm', editor, 'Rhythm');
-  contains('the grid asks whether there is live defence', editor, 'Live defence');
-  contains('and offers the unopposed option', editor, 'No defence');
+  // The matchup is picked the way the coach says it out loud — one control,
+  // not "5v5" plus a separate defence toggle.
+  contains('the matchup is offered contested', editor, '5v5');
+  contains('and unopposed, as its own option', editor, '5v0');
+  contains('right down to a 1v0', editor, '1v0');
   contains('it shows the resulting number', editor, 'Intensity 4.0');
   contains('and explains where it came from', editor, 'Half court');
 

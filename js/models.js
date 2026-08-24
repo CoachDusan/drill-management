@@ -80,17 +80,61 @@ export const SITUATION_LEVELS = [
 
 /* Whether there is live opposition. Counted by attacking players either way:
  * a 3v0 breakdown drill is situation 3, with `contact` false. */
+/* What the coach actually picks: the matchup as he would say it out loud.
+ * Each option is just a (situation, contact) pair — the two fields underneath
+ * are unchanged, and so is the formula.
+ *
+ * Note the deliberate flat spot at five players: 5v5 and 5v0 resolve to the
+ * same number. The situation scale bottoms out at 5v5, so the no-defence
+ * adjustment has nowhere left to drop. That is not an oversight — the club's
+ * own matched pair (5v5 FC 5.75, 5v0 FC 5.50, same court and rhythm) differ by
+ * 0.25, well inside the grid's own error of 0.46 and the +/-0.64 the same
+ * drill varies by between runs. Forcing them apart made the fit measurably
+ * worse (R-squared 0.937 -> 0.926), so the flat spot stays and the UI says so
+ * rather than hiding it. */
+export const SITUATION_OPTIONS = [
+  { situation: 5, contact: true,  label: '1v1' },
+  { situation: 5, contact: false, label: '1v0' },
+  { situation: 4, contact: true,  label: '2v2', note: 'Also 2v1' },
+  { situation: 4, contact: false, label: '2v0' },
+  { situation: 3, contact: true,  label: '3v3', note: 'Also 3v2' },
+  { situation: 3, contact: false, label: '3v0' },
+  { situation: 2, contact: true,  label: '4v4', note: 'Also 4v3' },
+  { situation: 2, contact: false, label: '4v0' },
+  { situation: 1, contact: true,  label: '5v5' },
+  { situation: 1, contact: false, label: '5v0' },
+];
+
+/** Find the option matching a drill's stored situation + contact. */
+export function situationOption(situation, contact) {
+  const s = clampLevel(situation);
+  const k = contact !== false;
+  return SITUATION_OPTIONS.find((o) => o.situation === s && o.contact === k)
+      || SITUATION_OPTIONS[SITUATION_OPTIONS.length - 2];
+}
+
 export const CONTACT_LEVELS = [
   { value: true,  label: 'Live defence',  note: 'Contested. Someone is trying to stop them.' },
   { value: false, label: 'No defence',    note: 'Unopposed pattern work — 5v0, 3v0, shooting, walk-through.' },
 ];
 
+/* RHYTHM — how long the action runs before something stops it.
+ *
+ * Originally worded purely in court lengths, which works for rep-based drills
+ * and says nothing useful about live play: a scrimmage is stopped by a whistle,
+ * not by a rep count. The coach could not tell a continuous Spanish 5v5 apart
+ * from a whistle-heavy scrimmage, so both were rated non-stop and both came out
+ * at 7.3 — the complaint that prompted this rewording.
+ *
+ * The levels and the maths are UNCHANGED. Only the labels are. The original
+ * court-length anchors are kept in the notes so the 43 imported library drills,
+ * which were rated against that wording, still mean what they meant. */
 export const RHYTHM_LEVELS = [
-  { value: 5, label: 'Non-stop',                note: 'Continuous, no dead time' },
-  { value: 4, label: 'Three lengths, then stop',note: '' },
-  { value: 3, label: 'Two lengths, then stop',  note: '' },
-  { value: 2, label: 'One length, then stop',   note: '' },
-  { value: 1, label: 'Half-court action, then stop', note: 'Reset after each rep' },
+  { value: 5, label: 'Non-stop',        note: 'Nothing interrupts it. Continuous 5v5, Spanish, rolling transition.' },
+  { value: 4, label: 'Rare stops',      note: 'Long runs between breaks. Around three lengths; a scrimmage with few whistles.' },
+  { value: 3, label: 'Regular stops',   note: 'Whistles, free throws, subs. Around two lengths between breaks.' },
+  { value: 2, label: 'Frequent stops',  note: 'One length, or one possession, then a reset.' },
+  { value: 1, label: 'Stop-start',      note: 'Reset after every rep. Half-court action, then stop.' },
 ];
 
 /**
@@ -183,6 +227,16 @@ export function intensityBand(value) {
   if (v <= 8) return 'i4';
   return 'i5';
 }
+
+/* ---- practice groups -------------------------------------------------
+ *
+ * Practice runs as a whole squad most of the time, so 'Team' stays first and
+ * costs zero taps. When it does split, the coach's own words are what matter:
+ * he works smalls against bigs, in two groups, not the guards / wings / bigs
+ * split this originally shipped with. Same principle as tags and categories —
+ * the presets are a first guess by someone who is not in that gym. Editable in
+ * Settings; stored under the 'groups' meta key. */
+export const DEFAULT_GROUPS = ['Team', 'Bigs', 'Smalls'];
 
 /* ---- drill categories ----------------------------------------------- */
 

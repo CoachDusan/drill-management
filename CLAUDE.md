@@ -430,6 +430,7 @@ js/ui.js              DOM builder, modal, toast, file download/pick
 js/components.js      intensity picker/badge, status dot
 js/app.js             hash router and nav
 js/views/*.js         one file per tab, plus rpe.js (a flow, not a tab)
+js/views/reports.js   minutes by category and by drill, over chosen dates
 tests/load.test.js    unit tests for the maths
 tests/history.test.js the aggregation layer, and the honesty rules in it
 tests/intensity.test.js  the grid, the movement tags, and the fit to real data
@@ -557,6 +558,190 @@ The rest, and why:
   was read-only apart from Delete. Drill rows are now tappable and the roster
   can be corrected.
 
+## What the coach asked for after two weeks (2026-08-30)
+
+Second round of feedback. Most of it was reporting. One item was a real hole
+in the intensity grid, and one was a request that had already been declined
+once and needed answering properly rather than repeating "no".
+
+### The intensity grid had a hole, and it was extrapolation
+
+**Free throws, entered as Stationary + 1v0, came out at 6.7 — and 4.0 even
+with the rhythm all the way down.** He said it should not be above 1.0. He was
+right that it was nonsense, and the cause is worth writing down because it is
+the kind of fault a good fit statistic hides.
+
+Check the club's 27 measured drills: **not one of them puts the adjusted
+situation above the court level.** Nobody runs 1v1 in a phone booth, so
+few-players-on-a-small-court is a corner the data has never visited. The grid
+kept climbing there anyway, because `situation` is a proxy for how much of the
+court's ground falls to each player, and it was being applied where there is
+no ground to fall to anybody. R-squared 0.934 says nothing about a region with
+no measurements in it.
+
+**Fix: at Stationary the matchup axis drops to its floor.** 1v0 and 5v5 come
+out the same on the spot — a free-throw line does not get harder because fewer
+people are standing on it. Free throws land on 2.0, and the club's own two
+measured stationary drills came in at 1.50 and 1.62, so 2.0 is about right for
+spot work.
+
+The fit is **identical** with and without it — R-squared 0.934, mean error
+0.471, worst 1.20 — because nothing measured is in the corner it touches. That
+is the justification, and `tests/intensity.test.js` asserts it directly
+(`no measured drill sits in the corner the stationary floor touches`) rather
+than leaving it in prose. If a measured drill ever lands there, the test fails
+and the rule has to be re-argued against real numbers.
+
+**The more general version was offered and he chose against it.** "The matchup
+can never beat the court" would also fix inside-the-arc shooting, but it drags
+two drills he actually uses: 1 on 1 HC 6.7 → 4.7 and 2 on 2 HC 6.0 → 5.3. His
+own measured half-court series (5v5 4.0, 4v4 4.5, 3v3 4.6) extrapolates to
+about 5.3 for 1v1 HC, so the general rule undershoots there by as much as the
+old grid overshot. Both costs were put in front of him with the numbers; he
+took the narrow fix. Tests pin all three of those values so nobody widens it
+later by accident.
+
+**The grid's floor is 2.0 by construction** — (1+1+1)/3 x 2. For anything
+genuinely lighter, the grid is the wrong tool and `manual` mode is the right
+one. The picker says so on screen when Stationary is selected.
+
+### Transitions: same dial, two wordings
+
+He asked again for the court-lengths input back alongside Rhythm — "put into
+account both things". The honest answer is that they are **one dial**, not two:
+Rhythm IS the old lengths dial, relabelled in the last round, and the levels
+and maths never changed. Court is what says how far a "length" runs, so court
+x rhythm already spans the transition question:
+
+| | Non-stop | Stop-start |
+|---|---|---|
+| Full court 5v5 | 7.3 | 4.7 |
+| Half court 5v5 | 6.0 | 3.3 |
+
+A fourth input would count the same fact a third time, with no column in the 27
+measured drills to set its weight from — the same reason game format, contact,
+continuity and work-to-rest were declined last round.
+
+**So every rhythm level now carries both wordings** ("Rare stops — 3 lengths,
+then stop"), and he sets it whichever way suits the drill. The lengths wording
+is also the one the 43 imported library drills were rated against, so keeping
+it visible is not only a convenience. `tests/intensity.test.js` asserts every
+level has both, and asserts `deriveIntensity` still takes exactly three
+factors — that test is what fails if someone adds a fourth.
+
+### Reports: its own tab, and calendar periods
+
+`js/views/reports.js`, a fifth tab. It is separate from Analysis because it
+answers a different question. **Analysis asks about the last 28 days; Reports
+asks about October.** One is a training-load window that has to roll; the other
+is a planning period with edges he chose. Mixing them into one range selector
+would make "Month" quietly mean "28 days" and he would never know.
+
+Day / Week / Month / Year, stepped with ‹ ›, plus **from … till** for anything
+else ("26.10. till 22.12."). A week runs Monday to Sunday.
+
+**The column unit follows the period rather than being a second choice.** A
+week is read day by day (his first table: 8.12. GD-3, 9.12. GD-2, 10.12. GD-1);
+a month week by week (his second: Week1 6.10.-13.10.); a year month by month.
+He drew both tables; neither needed him to pick a granularity.
+
+**Empty day columns are dropped, empty week columns are kept.** A week has
+seven days and he trains four; five blank columns push the ones that matter off
+the side of a tablet. An empty week inside a month is different — a week off is
+a fact about the month.
+
+**The contact rows come from the grid, not from the categories.** His table has
+rows the category list cannot produce:
+
+    Contact 1on1/2on2,..    contested, small-sided
+    Contact 5on5            contested, whole squad on the floor
+    Whole contact           the two above, added
+
+Categories are his own vocabulary and are about what a drill is FOR (defence,
+transition). Who is in it comes from `contact` and `situation`. So the table is
+**two cuts of the same runs, not a hierarchy**: a contested transition drill is
+counted under Transition and inside Whole contact, and unopposed shooting is in
+neither contact row. That is the one thing on the screen that can be misread,
+so it is stated in a footnote under the table and asserted in a test.
+
+**Drill runs now snapshot `situation` too.** Same pattern as `category` — old
+runs fall back to a library lookup, so the fallback shrinks over time. No
+migration and no schema bump; the tablet is carrying real data.
+
+**A run that cannot be classified is a fourth answer, not a bucket to hide it
+in.** A run recorded before the snapshot whose drill has since been deleted
+from the library genuinely cannot be placed. Folding it into Contact 5on5 would
+produce a contact total he would trust and should not, so it is left out of the
+contact rows, still counted in its category and in the totals, and named on
+screen with its minutes. Seventh place this rule now appears, after untimed
+clocks, untagged movement, unrated drills, missing RPE and unset game days.
+
+**Every live figure is over the drills he timed, and says so.** He runs the
+second stopwatch mainly on live and scrimmage work, which is exactly the work
+he wants reported — so most report cells have a live figure and some do not. A
+cell whose live coverage is short prints `timed on 15:00` under it; a cell with
+nothing timed prints `not timed` rather than a 0%. Density is pooled inside a
+cell, never an average of percentages.
+
+**Per drill, the spread is the point.** His worked example — "5on5, HC+2: 5
+times, longest 25/12.5, shortest 15/8, average 20/10, then GD-1: 3 times…" — is
+built as-is, and the game-day split is what turns a spread into a plan. A drill
+that runs 25 minutes before one game and 10 before the next is being used two
+different ways and the mean hides it.
+
+**Live min/max/average are computed over the TIMED runs only, with the count
+beside them.** Counting an untimed run as zero live minutes would report a
+"shortest live time" of 0:00 for a drill he simply did not put a second watch
+on — a lie the same shape as a real number. `spreadOf()` returns null for every
+live figure when nothing was timed.
+
+### The rest, and why
+
+- **Live time in minutes as well as per cent, everywhere.** The percentage is
+  what makes a 40-minute scrimmage comparable with a 10-minute one; the minutes
+  are what he plans with. `fmtLive()` prints both in that order, and the session
+  summary has them in two columns.
+
+- **Drag to reorder drill runs.** Pointer events, not HTML5 drag-and-drop,
+  which does not fire from a finger. The drag starts from a `≡` grip so that
+  tapping a row still opens it — a whole-row drag would swallow every tap. New
+  `order` field on the block, absent on every run recorded before this, and
+  those keep sorting by `createdAt` exactly as they did. No migration.
+
+  **The Done list flipped from newest-first to the order it ran.** Dragging a
+  drill "before another one" only means something in a list that is the practice
+  as it happened, and it now matches the summary he gets when he ends practice —
+  which is what he asked for in the next item anyway.
+
+  The harness got a synthetic 50px-per-row geometry so the drag can be driven
+  headlessly. It proves the gesture reaches the database. It proves nothing
+  about how it feels under a thumb.
+
+- **Notes on screen, in three places, on the lines he wrote them on.** Under a
+  running drill, under a finished one, and in the drill library list beside the
+  intensity and the movement tags. One class does it — `.run-note`, which
+  carries `white-space: pre-line`. Rendering a note with `.tiny` again silently
+  joins line two onto line one, so a test asserts the class and asserts the
+  newline survives into the DOM.
+
+- **Change drill can now create one.** "Change drill" only offered drills
+  already in the library, which meant a wrong tap noticed after practice could
+  not be corrected without leaving, adding the drill and coming back. Typing a
+  name that is not in the library now creates it unrated, exactly as starting a
+  drill courtside does.
+
+- **The views suite was date-pinned and rotting.** Fixtures used literal dates
+  ('2026-08-18'), so the ACWR assertions changed answer every day the calendar
+  moved and the suite went red without anything in the app changing. Fixtures
+  are now relative to today.
+
+### Not built, and why
+
+- **No CSV or PDF export of a report.** He did not ask for one. Worth offering
+  before building — a report he can hand to the head coach is a different
+  feature from a report he reads on the tablet, and the second is what was
+  asked for.
+
 ## Hosting
 
 Served by GitHub Pages from `main` / root:
@@ -616,4 +801,6 @@ retrying the push.
 3. **Done** — post-practice per-player RPE, compared against prescribed load.
 4. **Done** — analysis: drill and category totals, game-day (GD-n) buckets,
    weekly load, per-player trends, ACWR, monotony.
+4b. **Done** — reports: day / week / month / year / any two dates, by category
+   and by drill, full time beside live time, and his own weekly grid.
 5. Custom fields the coach defines himself, folded into the comparisons.

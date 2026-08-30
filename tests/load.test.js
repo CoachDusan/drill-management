@@ -11,7 +11,7 @@ import {
   blockLoad, blockMinutes, participationOf, playerBlockLoad,
   sessionLoadByPlayer, sessionMinutesByPlayer, sessionTeamLoad,
   loadCoverage, sRPELoad, feltVsPrescribed, rpeCoverage, sessionGap, gapFlag, dailySeries, acwrSeries, monotonySeries, weekOverWeek,
-  acwrFlag, monotonyFlag, fmtClock,
+  acwrFlag, monotonyFlag, fmtClock, fmtLive, blockLiveLabel, orderedBlocks, renumber,
 } from '../js/load.js';
 import { addDays } from '../js/models.js';
 
@@ -288,6 +288,51 @@ eq('zero clock', fmtClock(0), '0:00');
   ok('nothing here diagnoses anything',
      !/injur|overtrain|risk of|danger/i.test(
        [0.5, 1.5, 2.5, -1.5, -2.5, null].map((g) => gapFlag(g).note).join(' ')));
+}
+
+/* ---- live time in minutes, not only per cent --------------------------
+ * He asked for the minutes of live game as well as the share. The percentage
+ * is what makes two drills of different lengths comparable; the minutes are
+ * what he plans a week with. Both, always. */
+{
+  eq('live time reads as minutes and per cent', fmtLive(5, 0.5), '5:00 live · 50%');
+  eq('seconds survive', fmtLive(4.5, 0.25), '4:30 live · 25%');
+  eq('an untimed drill has no live label', fmtLive(null, null), '—');
+  eq('minutes alone still print when there is no density', fmtLive(6, null), '6:00 live');
+
+  const timed = { elapsedMs: 20 * 60000, running: false, liveMs: 5 * 60000 };
+  eq('a timed run labels itself', blockLiveLabel(timed), '5:00 live · 25%');
+  eq('an untimed run gives null, not a zero',
+     blockLiveLabel({ elapsedMs: 20 * 60000, running: false, liveMs: null }), null);
+}
+
+/* ---- hand-set running order -------------------------------------------
+ * Drag-to-reorder. `order` is absent on every run recorded before it existed,
+ * and those must keep sorting by createdAt exactly as they did — there is no
+ * migration and the tablet is carrying a season of real data. */
+{
+  const b = (id, createdAt, order) => ({ id, createdAt, order });
+
+  const legacy = [b('c', '2026-01-03'), b('a', '2026-01-01'), b('b', '2026-01-02')];
+  eq('with no order set, runs sort by when they were created',
+     orderedBlocks(legacy).map((x) => x.id).join(''), 'abc');
+
+  const dragged = [b('c', '2026-01-03', 0), b('a', '2026-01-01', 2), b('b', '2026-01-02', 1)];
+  eq('a hand-set order wins over the clock',
+     orderedBlocks(dragged).map((x) => x.id).join(''), 'cba');
+
+  // Zero is a real position, not a missing one.
+  eq('order 0 is not treated as unset',
+     orderedBlocks([b('x', '2026-01-01'), b('y', '2026-01-02', 0)]).map((n) => n.id).join(''), 'yx');
+
+  const mixed = [b('old', '2026-01-01'), b('moved', '2026-01-09', 0), b('older', '2026-01-02')];
+  eq('ordered runs lead, untouched ones follow in their own order',
+     orderedBlocks(mixed).map((x) => x.id).join(' '), 'moved old older');
+
+  eq('renumbering leaves the sequence dense',
+     renumber(orderedBlocks(dragged)).map((x) => x.order).join(''), '012');
+  eq('renumbering does not reshuffle',
+     renumber(orderedBlocks(dragged)).map((x) => x.id).join(''), 'cba');
 }
 
 print(`\n${pass} passed, ${fail} failed`);

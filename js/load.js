@@ -238,6 +238,54 @@ export function fmtDensity(d) {
   return d === null || d === undefined ? '—' : `${Math.round(d * 100)}%`;
 }
 
+/**
+ * Live time the way the coach asked for it: the minutes AND the percentage.
+ *
+ * A percentage on its own is not actionable — 50% of a 4-minute drill and 50%
+ * of a 40-minute one are different afternoons, and it is the minutes he plans
+ * with. The percentage stays because it is what makes two drills of different
+ * lengths comparable. Both, always, in that order.
+ */
+export function fmtLive(minutes, density) {
+  if (minutes === null || minutes === undefined) return '—';
+  const pct = (density === null || density === undefined) ? null : `${Math.round(density * 100)}%`;
+  return pct ? `${fmtMinutes(minutes)} live · ${pct}` : `${fmtMinutes(minutes)} live`;
+}
+
+/** The same, for one drill run. Null when the second stopwatch was not run. */
+export function blockLiveLabel(block) {
+  const mins = blockLiveMinutes(block);
+  if (mins === null) return null;
+  return fmtLive(mins, blockLiveDensity(block));
+}
+
+/* ---- running order ----------------------------------------------------
+ *
+ * Practice is not always recorded in the order it happened: a drill gets
+ * started late, or two clocks run at once and stop in the wrong sequence, or
+ * he logs one from memory afterwards. So the order is his to set by hand.
+ *
+ * `order` is absent on every run recorded before this existed, and those sort
+ * by createdAt exactly as they always did — no migration, and the tablet is
+ * carrying real data. Hand-ordered runs sort first, in his order; the rest
+ * follow in the order they were created.
+ */
+export function orderedBlocks(blocks) {
+  return blocks.slice().sort((a, b) => {
+    const ao = a.order, bo = b.order;
+    const aSet = ao !== null && ao !== undefined;
+    const bSet = bo !== null && bo !== undefined;
+    if (aSet && bSet && ao !== bo) return ao - bo;
+    if (aSet !== bSet) return aSet ? -1 : 1;
+    return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+  });
+}
+
+/** Renumber a list into 0..n-1, so the stored order stays dense and readable. */
+export function renumber(blocks) {
+  return blocks.map((b, i) => ({ ...b, order: i }));
+}
+
 /* ---- contact exposure ------------------------------------------------
  *
  * Kept separate from load on purpose. The measured data says live defence

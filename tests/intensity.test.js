@@ -8,7 +8,7 @@
 
 import {
   deriveIntensity, resolveIntensity, intensityInfo, intensityBand,
-  COURT_LEVELS, SITUATION_LEVELS, RHYTHM_LEVELS, CONTACT_LEVELS,
+  COURT_LEVELS, SITUATION_LEVELS, RHYTHM_LEVELS, CONTACT_LEVELS, rhythmLabel,
   TISSUE, TISSUE_LEVELS, tissueOf, hasTissueTags, makeDrill,
 } from '../js/models.js';
 import {
@@ -33,6 +33,28 @@ eq('stationary is the bottom', COURT_LEVELS[4].value, 1);
 eq('1v1 is the most intense situation', SITUATION_LEVELS[0].label, '1v1');
 eq('5v5 is the least', SITUATION_LEVELS[4].label, '5v5');
 eq('non-stop is the top rhythm', RHYTHM_LEVELS[0].label, 'Non-stop');
+
+/* He asked for the court-length dial back alongside the stoppage wording.
+ * They are ONE dial with two wordings, not two inputs — every level has to
+ * carry both, and the maths must still take exactly three factors. */
+ok('every rhythm level carries the court-length wording too',
+   RHYTHM_LEVELS.every((l) => typeof l.lengths === 'string' && l.lengths.length > 3));
+ok('the label says both', rhythmLabel(4).includes('Rare stops') && rhythmLabel(4).includes('lengths'));
+/* Court is what says how far a "length" runs, so court x rhythm already spans
+ * the transition question: a non-stop 5v5 is 7.3 full court and 6.0 half court,
+ * and rhythm alone moves a full-court 5v5 from 4.7 to 7.3. That is why
+ * transitions are not a fourth input. */
+ok('court separates a non-stop 5v5 full court from the same drill half court',
+   deriveIntensity(5, 1, 5, true) - deriveIntensity(3, 1, 5, true) >= 1.29,
+   `${deriveIntensity(5, 1, 5, true)} vs ${deriveIntensity(3, 1, 5, true)}`);
+ok('and rhythm moves a full-court 5v5 by more than two and a half points',
+   deriveIntensity(5, 1, 5, true) - deriveIntensity(5, 1, 1, true) >= 2.5,
+   `${deriveIntensity(5, 1, 5, true)} vs ${deriveIntensity(5, 1, 1, true)}`);
+/* Three required factors + the defence flag, which has a default. If a fourth
+ * input ever gets added this fails, which is the point: the club's 27 measured
+ * drills have no column to set its weight from. */
+eq('deriveIntensity still takes exactly three required factors',
+   deriveIntensity.length, 3);
 
 /* ---- the formula ---- */
 eq('everything at minimum gives 2', deriveIntensity(1, 1, 1), 2);
@@ -64,6 +86,26 @@ const contested = makeDrill({ intensityMode: 'derived', court: 5, situation: 3, 
 ok('resolveIntensity honours the defence flag',
   resolveIntensity(noDefence) < resolveIntensity(contested),
   `${resolveIntensity(noDefence)} vs ${resolveIntensity(contested)}`);
+
+/* ---- STATIONARY_FLOOR ---------------------------------------------------
+ * The coach entered free throws as Stationary + 1v0 and got 6.7 — 4.0 even
+ * with the rhythm all the way down. On the spot there is no ground for the
+ * matchup axis to divide, so it drops to its floor. If someone removes this,
+ * free throws go back to being rated harder than a half-court 5v5. */
+eq('free throws come out at the bottom of the grid', deriveIntensity(1, 5, 1, false), 2);
+eq('a stationary 1v0 and a stationary 5v5 are the same drill',
+   deriveIntensity(1, 5, 3, false), deriveIntensity(1, 1, 3, true));
+eq('the matchup cannot lift a stationary drill at all',
+   deriveIntensity(1, 5, 5, true), deriveIntensity(1, 1, 5, true));
+ok('rhythm still moves a stationary drill — it is the only axis left',
+   deriveIntensity(1, 1, 5) > deriveIntensity(1, 1, 1));
+
+/* It must NOT reach up off the spot. These two are drills he actually has in
+ * his library, and the general "matchup can never beat the court" rule — the
+ * one he did not pick — would have quietly dropped both. */
+eq('1v1 half court is untouched', deriveIntensity(3, 5, 2, true), 6.7);
+eq('2v2 half court is untouched', deriveIntensity(3, 4, 2, true), 6);
+eq('inside the arc is untouched', deriveIntensity(2, 5, 5, true), 8);
 
 /* ---- contact exposure is counted, but kept out of load ---- */
 const live20 = { ...mins0(20), intensity: 7, participation: {}, contact: true };
@@ -209,6 +251,22 @@ for (let i = 0; i < ordered.length; i++) {
 const totalPairs = (ordered.length * (ordered.length - 1)) / 2;
 ok(`the grid rarely ranks a lighter drill above a harder one (${inversions} bad pairs of ${totalPairs})`,
   inversions <= totalPairs * 0.05, String(inversions));
+
+/* THE JUSTIFICATION FOR THE STATIONARY FLOOR, asserted rather than asserted-in-prose:
+   not one measured drill puts the matchup above the court level. Few players on
+   a small court is a corner the club has never tracked, so the grid was
+   extrapolating there — and the floor changes nothing that WAS measured. If a
+   measured drill ever lands in that corner, this fails and the rule has to be
+   re-argued against real numbers instead of a principle. */
+const inCorner = MEASURED.filter(([, c, s, , k]) => {
+  const adj = Math.min(5, Math.max(1, k === false ? Math.max(1, s - 1) : s));
+  return adj > c;
+});
+eq('no measured drill sits in the corner the stationary floor touches', inCorner.length, 0);
+
+const stationary = MEASURED.filter((row) => row[1] === 1);
+ok(`stationary drills still predict 2.0 (measured ${stationary.map((r) => r[5]).join(', ')})`,
+  stationary.every(([, c, s, r, k]) => deriveIntensity(c, s, r, k) === 2), String(stationary.length));
 
 print(`fit: R-squared ${r2.toFixed(3)}, mean error ${mae.toFixed(2)}, worst ${worst.toFixed(2)} (${worstName})`);
 }

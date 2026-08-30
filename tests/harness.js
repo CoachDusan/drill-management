@@ -54,6 +54,30 @@ class Node {
     child.parentNode = null;
     return child;
   }
+  insertBefore(child, ref) {
+    if (child.parentNode) child.parentNode.removeChild(child);
+    child.parentNode = this;
+    const i = ref ? this.children.indexOf(ref) : -1;
+    if (i < 0) this.children.push(child); else this.children.splice(i, 0, child);
+    return child;
+  }
+  /** Nearest ancestor (self included) matching the selector. */
+  closest(sel) {
+    let n = this;
+    while (n) { if (n.matches && n.matches(sel)) return n; n = n.parentNode; }
+    return null;
+  }
+  /* Synthetic geometry: every element is 50px tall and stacked in the order
+   * it sits in its parent. Enough to drive drag-to-reorder, which decides
+   * where a row lands by comparing a pointer against row midpoints. It is
+   * NOT a layout engine and proves nothing about how anything looks. */
+  getBoundingClientRect() {
+    const i = this.parentNode ? this.parentNode.children.indexOf(this) : 0;
+    const top = Math.max(0, i) * 50;
+    return { top, bottom: top + 50, height: 50, left: 0, right: 300, width: 300, x: 0, y: top };
+  }
+  setPointerCapture() {}
+  releasePointerCapture() {}
   remove() { if (this.parentNode) this.parentNode.removeChild(this); }
 
   get firstChild() { return this.children[0] || null; }

@@ -10,13 +10,21 @@
 import { document, flush, runTimers, resetDatabases } from './harness.js';
 
 const db = await import('../js/db.js');
-const { makeDrill, makePlayer } = await import('../js/models.js');
+const { makeDrill, makePlayer, toDateKey, addDays } = await import('../js/models.js');
+
+/* Fixture dates are RELATIVE to today, never pinned to a literal.
+ * The ACWR assertions below depend on how much history exists, and a pinned
+ * date silently changes that answer every day the calendar moves — the suite
+ * rots into red without anything in the app having changed. */
+const TODAY = toDateKey(new Date());
+const ago = (n) => addDays(TODAY, -n);
 const { blockLoad } = await import('../js/load.js');
 const drills = await import('../js/views/drills.js');
 const roster = await import('../js/views/roster.js');
 const practice = await import('../js/views/practice.js');
 const settings = await import('../js/views/settings.js');
 const analysis = await import('../js/views/analysis.js');
+const reports = await import('../js/views/reports.js');
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail) {
@@ -121,12 +129,25 @@ contains('library previews the typical load', root, '~87 AU');
 contains('a measured drill is labelled as measured', root, 'measured');
 contains('movement tags are summarised in the list', root, 'Spri high');
 contains('an untagged drill is called out', root, 'No movement tags yet');
+/* He asked for the drill's own notes on the library list too, beside how hard
+ * it is and its movement tags — and on as many lines as he wrote them on. */
+{
+  const withNote = (await db.getAll(db.STORES.drills))[0];
+  await db.put(db.STORES.drills, { ...withNote, notes: 'two lines\nsecond line' });
+  root = newRoot();
+  await drills.render(root);
+  await flush();
+  contains('drill notes are on the library list', root, 'second line');
+  const noteEls = root.querySelectorAll('.run-note');
+  ok('and in the class that keeps their line breaks', noteEls.length > 0);
+  ok('with the break intact', noteEls[0].textContent.indexOf('\n') !== -1);
+}
 
 /* ---- run a practice ---- */
 
 const { makeSession, makeBlock } = await import('../js/models.js');
 const session = makeSession({
-  date: '2026-08-18',
+  date: ago(6),
   label: 'Tuesday session',
   rosterIds: players.filter((p) => p.status === 'active').map((p) => p.id),
 });
@@ -657,21 +678,21 @@ contains('and how many are waiting', root, 'waiting for one');
 await db.put(db.STORES.sessions, { ...(await db.get(db.STORES.sessions, session.id)), gameDay: 'GD-1' });
 
 const gd1b = makeSession({
-  date: '2026-08-21', gameDay: 'GD-1', label: 'Friday', status: 'complete',
+  date: ago(2), gameDay: 'GD-1', label: 'Friday', status: 'complete',
   rosterIds: session.rosterIds,
   startedAt: '2026-08-21T17:00:00.000Z', endedAt: '2026-08-21T18:30:00.000Z',
 });
 const gd2 = makeSession({
-  date: '2026-08-20', gameDay: 'GD-2', label: 'Thursday', status: 'complete',
+  date: ago(3), gameDay: 'GD-2', label: 'Thursday', status: 'complete',
   rosterIds: session.rosterIds,
 });
 // A game day with no drills clocked in it: the row will read 0.
 const gdGame = makeSession({
-  date: '2026-08-22', gameDay: 'GD', type: 'Game', label: 'Away at Partizan',
+  date: ago(1), gameDay: 'GD', type: 'Game', label: 'Away at Partizan',
   status: 'complete', rosterIds: session.rosterIds,
 });
 const gdx = makeSession({
-  date: '2026-08-12', gameDay: 'GD-X', label: 'Off week', status: 'complete',
+  date: ago(6), gameDay: 'GD-X', label: 'Off week', status: 'complete',
   rosterIds: session.rosterIds,
 });
 await db.putMany(db.STORES.sessions, [gd1b, gd2, gdx, gdGame]);
@@ -802,11 +823,168 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
   const onDisk = [
     'app', 'db', 'models', 'load', 'history', 'ui', 'components',
   ].map((n) => `./js/${n}.js`).concat(
-    ['practice', 'drills', 'roster', 'analysis', 'settings', 'rpe']
+    ['practice', 'drills', 'roster', 'analysis', 'reports', 'settings', 'rpe']
       .map((n) => `./js/views/${n}.js`));
 
   const missing = onDisk.filter((f) => modules.indexOf(f) === -1);
   ok('no module is left out of the offline cache', missing.length === 0, missing.join());
+}
+
+/* ======================================================================
+   What the coach asked for after a fortnight on the tablet
+   ====================================================================== */
+
+/* ---- drag a drill before another one -----------------------------------
+ * The drag itself is pointer events against row midpoints, so the harness
+ * gives every element a synthetic 50px box (see harness.js). This proves the
+ * gesture reaches the database, not that it feels right under a thumb —
+ * only the real tablet can say that. */
+{
+  await db.clearAll();
+  await flush();
+
+  const ses = makeSession({ date: TODAY, label: 'Order test', status: 'live', rosterIds: [] });
+  await db.put(db.STORES.sessions, ses);
+
+  const mk = (name, createdAt) => makeBlock({
+    sessionId: ses.id, drillName: name, intensity: 5,
+    running: false, elapsedMs: 10 * 60000, endedAt: createdAt, createdAt,
+  });
+  const first = mk('First drill', '2026-01-01T10:00:00.000Z');
+  const second = mk('Second drill', '2026-01-01T10:20:00.000Z');
+  const third = mk('Third drill', '2026-01-01T10:40:00.000Z');
+  await db.putMany(db.STORES.blocks, [first, second, third]);
+
+  root = newRoot();
+  await practice.render(root);
+  await flush();
+
+  const rows = root.querySelectorAll('[data-id]');
+  ok('the done list is draggable', rows.length === 3, String(rows.length));
+  ok('drills are listed in the order they ran, first at the top',
+    rows[0].textContent.indexOf('First drill') !== -1, rows[0].textContent);
+  contains('the list says how to reorder it', root, 'before or after another one');
+
+  // Drag the third drill above the first: press its grip, move to the top.
+  const list = rows[0].parentNode;
+  const handle = rows[2].querySelector('[data-grip]');
+  list.dispatch('pointerdown', { target: handle, pointerId: 1 });
+  list.dispatch('pointermove', { target: handle, pointerId: 1, clientY: 2 });
+  list.dispatch('pointerup', { target: handle, pointerId: 1 });
+  await flush();
+
+  const saved = (await db.getBy(db.STORES.blocks, 'sessionId', ses.id))
+    .slice().sort((a, b) => a.order - b.order).map((b) => b.drillName);
+  ok('the dragged drill is saved in its new place',
+    saved.join(' | ') === 'Third drill | First drill | Second drill', saved.join(' | '));
+  ok('every run gets a dense order, so the next drag is a straight comparison',
+    (await db.getBy(db.STORES.blocks, 'sessionId', ses.id))
+      .map((b) => b.order).sort().join('') === '012');
+
+  // And it survives a reload — the whole point of storing it.
+  root = newRoot();
+  await practice.render(root);
+  await flush();
+  const after = root.querySelectorAll('[data-id]');
+  ok('the new order is what the screen shows next time',
+    after[0].textContent.indexOf('Third drill') !== -1, after[0].textContent);
+  practice.teardown();
+}
+
+/* ---- notes, on the screen and on two lines ------------------------------
+ * He writes them courtside on more than one line ("till 7 / Marko tight
+ * hamstring") and they have to read the same everywhere. `.run-note` is the
+ * one class that carries `white-space: pre-line`; if a note is ever rendered
+ * with `.tiny` again, the second line silently joins the first. */
+{
+  const ses = (await db.getAll(db.STORES.sessions))[0];
+  const blocks = await db.getBy(db.STORES.blocks, 'sessionId', ses.id);
+  const note = 'till 7\nMarko tight hamstring';
+  await db.put(db.STORES.blocks, { ...blocks[0], note, liveMs: 4 * 60000 });
+
+  root = newRoot();
+  await practice.render(root);
+  await flush();
+
+  contains('the note is on the live screen, not only in the summary', root, 'Marko tight hamstring');
+  const noted = root.querySelectorAll('.run-note');
+  ok('the note is rendered in the class that keeps its line breaks', noted.length > 0);
+  ok('and the line break itself survives into the DOM',
+    noted[0].textContent.indexOf('\n') !== -1, JSON.stringify(noted[0].textContent));
+
+  contains('live time is shown in minutes, not only as a percentage', root, '4:00 live');
+  contains('the percentage is still there beside it', root, '40%');
+  practice.teardown();
+}
+
+/* ---- the reports screen ------------------------------------------------
+ * His own weekly table: categories down the side, one column per training
+ * day with its game-week label, and every cell carrying full time AND live
+ * time. These check the sentence he asked for actually reaches the page. */
+{
+  await db.clearAll();
+  await flush();
+
+  const lib = [
+    makeDrill({ id: 'r_def', name: 'Shell defence', category: 'Defense', situation: 1, contact: false }),
+    makeDrill({ id: 'r_tr', name: 'Transition 1on1', category: 'Transition', situation: 5, contact: true }),
+    makeDrill({ id: 'r_5v5', name: '5on5, HC+2', category: 'Live / scrimmage', situation: 1, contact: true }),
+  ];
+  await db.putMany(db.STORES.drills, lib);
+
+  const mkSes = (date, gameDay) => makeSession({
+    date, gameDay, status: 'complete', rosterIds: [],
+    endedAt: new Date().toISOString(),
+  });
+  const s1 = mkSes(ago(2), 'GD-3');
+  const s2 = mkSes(ago(1), 'GD-1');
+  await db.putMany(db.STORES.sessions, [s1, s2]);
+
+  const mkBlk = (ses, drill, mins, liveMins) => makeBlock({
+    sessionId: ses.id, drillId: drill.id, drillName: drill.name,
+    category: drill.category, situation: drill.situation, contact: drill.contact,
+    intensity: 6, running: false, elapsedMs: mins * 60000,
+    liveMs: liveMins === null ? null : liveMins * 60000,
+  });
+  await db.putMany(db.STORES.blocks, [
+    mkBlk(s1, lib[0], 15, null),
+    mkBlk(s1, lib[1], 15, 5),
+    mkBlk(s1, lib[2], 25, 15),
+    mkBlk(s2, lib[2], 10, 5),
+  ]);
+
+  root = newRoot();
+  await reports.render(root);
+  await flush();
+
+  contains('the reports screen renders', root, 'Reports');
+  contains('his own category rows are there', root, 'Defense');
+  contains('and the contact rows the categories cannot produce', root, 'Contact 5on5');
+  contains('including the small-sided one', root, 'Contact 1on1/2on2');
+  contains('and the two of them added up', root, 'Whole contact');
+
+  // The sentence he actually asked for: minutes of live game, not only a share.
+  contains('cells carry live time in minutes', root, '15:00 live');
+  contains('with the percentage beside it', root, '60%');
+
+  // Columns are training days, labelled with where they sat in the game week.
+  contains('the game-week label is on the column', root, 'GD-3');
+  contains('and so is the next one', root, 'GD-1');
+
+  // Honesty: the shell drill was never timed, and the screen has to say so
+  // rather than letting a short live figure read as a quiet day.
+  contains('an untimed drill is declared, not counted as 0% live', root, 'not timed');
+  contains('and the period says how much of it was measured at all', root, 'Live coverage');
+
+  // Drill by drill, with the spread he asked for.
+  contains('the per-drill section is there', root, 'By drill');
+  contains('and names a drill', root, '5on5, HC+2');
+  contains('with the longest run', root, 'Longest');
+  contains('the shortest', root, 'Shortest');
+  contains('and the average', root, 'Average');
+
+  contains('the date range is on screen', root, 'session');
+  reports.teardown();
 }
 
 print(`\n${pass} passed, ${fail} failed`);

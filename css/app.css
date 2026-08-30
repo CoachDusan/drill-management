@@ -424,3 +424,51 @@ tbody tr:last-child td { border-bottom: none; }
 @media (max-width: 720px) {
   .mix-row .mix-label { flex-basis: 108px; font-size: 13px; }
 }
+
+/* ---- drag to reorder ------------------------------------------------------
+ * The grip is its own tap target so that dragging a drill and opening it are
+ * two different gestures. `touch-action: none` is what stops the tablet
+ * scrolling the page instead of moving the row. */
+.grip {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; min-height: var(--tap);
+  margin: -11px 0 -11px -6px;
+  color: var(--text-3); font-size: 19px; line-height: 1;
+  cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.grip:active { cursor: grabbing; color: var(--text); }
+.row.dragging { opacity: .65; box-shadow: 0 6px 20px rgba(0,0,0,.22); }
+
+/* ---- drill-run notes ------------------------------------------------------
+ * Written courtside on two lines ("till 7 / Marko tight hamstring"), so they
+ * have to STAY on two lines everywhere they appear — the live screen, the
+ * session summary and the reports all read from this one class. */
+.run-note {
+  white-space: pre-line;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.45;
+  margin-top: 3px;
+}
+td .run-note { max-width: 320px; white-space: pre-line; }
+
+/* ---- report table ---------------------------------------------------------
+ * His own weekly grid: categories down the side, one column per day or per
+ * week. Cells carry two lines — total time, then live time — so the row height
+ * is deliberately taller than the other tables in the app. */
+table.report td, table.report th { vertical-align: top; }
+table.report th { line-height: 1.3; }
+table.report td.num { text-align: right; }
+table.report .th-sub {
+  font-size: 11.5px; font-weight: 500; letter-spacing: 0;
+  text-transform: none; color: var(--text-3); margin-top: 2px;
+}
+table.report .live-line { font-size: 13px; color: var(--text-2); margin-top: 2px; }
+table.report tr.emph td { font-weight: 650; background: var(--surface-2); }
+table.report td.total-col { background: var(--surface-2); }
+table.report tfoot td {
+  border-top: 2px solid var(--line);
+  font-weight: 650;
+}
+table.report tbody td:first-child { min-width: 140px; }

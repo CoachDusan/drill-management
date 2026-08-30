@@ -12,6 +12,7 @@ const ROUTES = [
   { id: 'drills',   label: 'Drills',   icon: '📋', module: () => import('./views/drills.js') },
   { id: 'roster',   label: 'Roster',   icon: '👥', module: () => import('./views/roster.js') },
   { id: 'analysis', label: 'Analysis', icon: '📈', module: () => import('./views/analysis.js') },
+  { id: 'reports',  label: 'Reports',  icon: '🗓', module: () => import('./views/reports.js') },
   { id: 'settings', label: 'Settings', icon: '⚙️', module: () => import('./views/settings.js') },
 ];
 

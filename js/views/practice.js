@@ -17,11 +17,12 @@ import {
   blockMinutes, blockLoad, sessionTeamLoad, sessionTeamMinutes,
   sessionLoadByPlayer, blockTissue, tissueCoverage, contactShare,
   blockLiveDensity, blockLiveMinutes, sessionLiveDensity, loadCoverage,
-  fmtLoad, fmtClock, fmtMinutes, fmtDensity,
+  blockLiveLabel, orderedBlocks, renumber,
+  fmtLoad, fmtClock, fmtMinutes, fmtDensity, fmtLive,
 } from '../load.js';
 import {
   h, mount, toast, openModal, confirmDanger, field,
-  textInput, numberInput, selectInput, emptyState,
+  textInput, numberInput, selectInput, emptyState, reorderable, grip,
 } from '../ui.js';
 import { intensityPicker, intensityBadge } from '../components.js';
 import { collectRPE, feltPanel } from './rpe.js';
@@ -264,7 +265,7 @@ async function renderLive(root, session) {
   ]);
 
   const roster = players.filter((p) => (session.rosterIds || []).includes(p.id));
-  const ordered = blocks.slice().sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+  const ordered = orderedBlocks(blocks);
   const running = ordered.filter((b) => b.running);
   const done = ordered.filter((b) => !b.running);
 
@@ -322,9 +323,18 @@ async function renderLive(root, session) {
       h('div', { class: 'list' }, running.map((b) => runningCard(b, session, roster))),
     ]) : null,
 
+    /* In the order they were run, first at the top, not newest-first. This is
+       the practice plan as it happened — which is what makes dragging a drill
+       up or down mean something, and it matches the session summary he gets
+       when he ends practice. */
     done.length ? h('div', {}, [
       h('h2', { text: 'Done' }),
-      h('div', { class: 'list' }, done.slice().reverse().map((b) => doneRow(b, session, roster))),
+      h('div', { class: 'tiny', style: { margin: '-6px 0 10px' },
+        text: 'In the order they ran. Drag the ≡ handle to move a drill before or after another one.' }),
+      reorderable(
+        h('div', { class: 'list' }, done.map((b) => doneRow(b, session, roster))),
+        (ids) => saveOrder(session, ids),
+      ),
     ]) : null,
 
     !ordered.length ? emptyState('🏀', 'Nothing recorded yet',
@@ -386,6 +396,8 @@ function runningCard(block, session, roster) {
 
     (outCount || limitedCount) ? h('div', { class: 'tiny', style: { marginTop: '9px' },
       text: [outCount ? `${outCount} sitting out` : '', limitedCount ? `${limitedCount} limited` : ''].filter(Boolean).join(' · ') }) : null,
+
+    block.note ? h('div', { class: 'run-note', text: block.note }) : null,
   ]);
 }
 
@@ -393,21 +405,31 @@ function runningCard(block, session, roster) {
 
 function doneRow(block, session, roster) {
   const mins = blockMinutes(block);
-  const density = blockLiveDensity(block);
   const paused = block.elapsedMs > 0 && !block.endedAt;
-  return h('div', { class: 'row clickable', onclick: () => editBlock(block, session, roster) }, [
+  return h('div', {
+    class: 'row clickable',
+    'data-id': block.id,
+    onclick: () => editBlock(block, session, roster),
+  }, [
+    grip(),
     intensityBadge(block.intensity),
     h('div', { class: 'grow' }, [
       h('div', { class: 'name' }, [
         block.drillName,
         block.group && block.group !== 'Team' ? h('span', { class: 'chip', style: { marginLeft: '8px' }, text: block.group }) : null,
         paused ? h('span', { class: 'chip', style: { marginLeft: '8px' }, text: 'paused' }) : null,
+        block.unrated ? h('span', { class: 'chip', style: { marginLeft: '8px' }, text: 'unrated' }) : null,
       ]),
+      // Live time in minutes AND per cent: the percentage makes two drills of
+      // different lengths comparable, the minutes are what he plans with.
       h('div', { class: 'tiny', text: [
         fmtMinutes(mins),
         `${fmtLoad(blockLoad(block))} AU`,
-        density === null ? null : `${fmtDensity(density)} live`,
+        blockLiveLabel(block),
       ].filter(Boolean).join(' · ') }),
+      // What he wrote about this run, on the live screen and not only in the
+      // summary. `.run-note` keeps his line breaks.
+      block.note ? h('div', { class: 'run-note', text: block.note }) : null,
     ]),
     paused
       ? h('button', { class: 'btn btn-sm', onclick: (e) => { e.stopPropagation(); resumeBlock(block); } }, 'Resume')
@@ -687,6 +709,7 @@ async function addBlock(session, drills, roster) {
     intensity: resolveIntensity(d),
     tissue: { ...(d.tissue || { jump: null, sprint: null, cod: null }) },
     contact: d.contact !== false,
+    situation: d.situation === undefined ? null : d.situation,
     group: result.group,
     startedAt: new Date().toISOString(),
     running: true,
@@ -727,6 +750,7 @@ async function manualBlock(session, drills, group, roster) {
     intensity: resolveIntensity(result.drill),
     tissue: { ...(result.drill.tissue || { jump: null, sprint: null, cod: null }) },
     contact: result.drill.contact !== false,
+    situation: result.drill.situation === undefined ? null : result.drill.situation,
     group,
     startedAt: new Date().toISOString(),
     endedAt: new Date().toISOString(),
@@ -736,6 +760,34 @@ async function manualBlock(session, drills, group, roster) {
   });
   await db.put(db.STORES.blocks, block);
   toast(`${result.drill.name} logged`);
+  await render(rootEl);
+}
+
+/**
+ * Persist a hand-set running order after a drag.
+ *
+ * Every run in the session is renumbered, not just the ones on screen: a
+ * running drill sits in its own list above, and leaving it without an `order`
+ * would drop it to the bottom the moment it stops. The numbers stay dense so
+ * the next drag is a straight comparison.
+ */
+async function saveOrder(session, idsInOrder) {
+  const all = await db.getBy(db.STORES.blocks, 'sessionId', session.id);
+  const rank = new Map(idsInOrder.map((id, i) => [id, i]));
+  // Anything not on screen (a clock still running) keeps its existing place in
+  // the sequence rather than being shuffled by a drag it was not part of.
+  const sorted = orderedBlocks(all).sort((a, b) => {
+    const ar = rank.has(a.id) ? rank.get(a.id) : null;
+    const br = rank.has(b.id) ? rank.get(b.id) : null;
+    if (ar !== null && br !== null) return ar - br;
+    return 0;
+  });
+  let i = 0;
+  for (const b of sorted) {
+    const next = { ...b, order: i++ };
+    if (next.order !== b.order) await db.put(db.STORES.blocks, next);
+  }
+  toast('Order saved');
   await render(rootEl);
 }
 
@@ -939,6 +991,27 @@ async function swapDrill(block, session, roster) {
     const list = h('div', { class: 'list' });
     function paint() {
       list.innerHTML = '';
+
+      /* Same escape hatch as starting a drill: the drill he meant is not always
+         in the library, and the one place he notices a wrong tap is often after
+         practice. Making him leave, add it to the library and come back is how
+         a correction stops getting made. */
+      const typed = q.trim();
+      if (typed && !drills.some((d) => d.name.toLowerCase() === typed.toLowerCase())) {
+        list.appendChild(h('div', {
+          class: 'row clickable',
+          style: { borderLeft: '3px solid var(--accent)' },
+          onclick: () => done({ newName: typed }),
+        }, [
+          h('span', { class: 'chip', text: 'new' }),
+          h('div', { class: 'grow' }, [
+            h('div', { class: 'name', text: `Change to “${typed}”` }),
+            h('div', { class: 'tiny', text: 'Added to the library, rated whenever you get to it' }),
+          ]),
+          h('span', { class: 'tiny', text: 'Use ›' }),
+        ]));
+      }
+
       drills
         .filter((d) => !q || `${d.name} ${d.category}`.toLowerCase().includes(q.toLowerCase()))
         .forEach((d) => list.appendChild(h('div', {
@@ -955,9 +1028,9 @@ async function swapDrill(block, session, roster) {
     paint();
     body.append(
       h('p', { class: 'tiny', style: { marginTop: 0 } },
-        'The clock, the notes and who was in all stay as they are. Only the drill changes.'),
+        'The clock, the notes and who was in all stay as they are. Only the drill changes. Type a name that is not in the library to create it.'),
       h('input', {
-        type: 'search', placeholder: 'Search drills…',
+        type: 'search', placeholder: 'Search drills, or type a new name…',
         oninput: (e) => { q = e.target.value; paint(); },
       }),
       list,
@@ -965,7 +1038,29 @@ async function swapDrill(block, session, roster) {
     return null;
   }, { cancelLabel: 'Cancel', wide: true });
 
-  if (!picked || !picked.drill) return;
+  if (!picked) return;
+
+  /* A drill invented here is unrated on purpose — no intensity, so its load is
+     null rather than a made-up number, and the session says what is missing.
+     Rating it later fills this run in (see backfillUnratedRuns). */
+  if (picked.newName) {
+    const drill = makeDrill({ name: picked.newName, unrated: true, intensity: null });
+    await db.put(db.STORES.drills, drill);
+    const fresh = await db.get(db.STORES.blocks, block.id);
+    await db.put(db.STORES.blocks, {
+      ...fresh,
+      drillId: drill.id,
+      drillName: drill.name,
+      category: drill.category || null,
+      intensity: null,
+      tissue: { jump: null, sprint: null, cod: null },
+      unrated: true,
+    });
+    toast(`Changed to ${drill.name} — rate it when you get a minute`);
+    return render(rootEl);
+  }
+
+  if (!picked.drill) return;
   const d = picked.drill;
   const fresh = await db.get(db.STORES.blocks, block.id);
   await db.put(db.STORES.blocks, {
@@ -976,6 +1071,7 @@ async function swapDrill(block, session, roster) {
     intensity: resolveIntensity(d),
     tissue: { ...(d.tissue || { jump: null, sprint: null, cod: null }) },
     contact: d.contact !== false,
+    situation: d.situation === undefined ? null : d.situation,
     unrated: false,
   });
   toast(`Changed to ${d.name}`);
@@ -1226,7 +1322,7 @@ async function openSessionSummary(session) {
   ]);
   const roster = players.filter((p) => (session.rosterIds || []).includes(p.id));
   const byPlayer = sessionLoadByPlayer(blocks, roster.map((p) => p.id));
-  const ordered = blocks.slice().sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+  const ordered = orderedBlocks(blocks);
 
   // Built before the modal opens because contextCard reads saved tags.
   const contextSlot = h('div', { style: { marginBottom: '6px' } });
@@ -1270,27 +1366,34 @@ async function openSessionSummary(session) {
       h('div', { class: 'table-wrap' }, [
         h('table', {}, [
           h('thead', {}, h('tr', {}, [
-            h('th', { text: 'Drill' }), h('th', { text: 'Group' }),
-            h('th', { class: 'num', text: 'Min' }), h('th', { class: 'num', text: 'Live' }),
+            h('th', { text: '' }), h('th', { text: 'Drill' }), h('th', { text: 'Group' }),
+            h('th', { class: 'num', text: 'Min' }),
+            h('th', { class: 'num', text: 'Live' }), h('th', { class: 'num', text: 'Live %' }),
             h('th', { class: 'num', text: 'Int' }), h('th', { class: 'num', text: 'AU' }),
           ])),
-          h('tbody', {}, ordered.map((b) => h('tr', {
+          reorderable(h('tbody', {}, ordered.map((b) => h('tr', {
             class: 'clickable',
+            'data-id': b.id,
             title: 'Edit this drill run',
             onclick: () => done({ __action: 'editBlock', blockId: b.id }),
           }, [
+            h('td', {}, grip()),
             h('td', {}, [
               b.drillName,
               b.contact === false ? h('span', { class: 'chip', style: { marginLeft: '7px' }, text: 'no D' }) : null,
               b.unrated ? h('span', { class: 'chip', style: { marginLeft: '7px' }, text: 'unrated' }) : null,
-              b.note ? h('div', { class: 'tiny', text: b.note }) : null,
+              // `.run-note`, not `.tiny`: it keeps the line breaks he typed.
+              b.note ? h('div', { class: 'run-note', text: b.note }) : null,
             ]),
             h('td', { class: 'tiny', text: b.group || 'Team' }),
             h('td', { class: 'num', text: fmtMinutes(blockMinutes(b)) }),
+            // Minutes and per cent in their own columns — he asked for the
+            // minutes of live game, not only the share.
+            h('td', { class: 'num', text: blockLiveMinutes(b) === null ? '—' : fmtMinutes(blockLiveMinutes(b)) }),
             h('td', { class: 'num', text: fmtDensity(blockLiveDensity(b)) }),
             h('td', { class: 'num', text: b.intensity === null || b.intensity === undefined ? '—' : String(b.intensity) }),
             h('td', { class: 'num', text: blockLoad(b) === null ? '—' : fmtLoad(blockLoad(b)) }),
-          ]))),
+          ]))), (ids) => done({ __action: 'reorder', ids })),
         ]),
       ]),
 
@@ -1330,13 +1433,19 @@ async function openSessionSummary(session) {
         h('button', { class: 'btn btn-sm btn-danger', onclick: () => done({ __action: 'delete' }) }, 'Delete session'),
       ]),
       h('p', { class: 'tiny', style: { marginTop: '6px' } },
-        'Tap any drill above to fix its length, intensity, group, notes, or which drill it was.'),
+        'Tap any drill above to fix its length, intensity, group, notes, or which drill it was — including changing it to a drill that is not in the library yet. Drag the ≡ handle to reorder.'),
     );
     return null;
   }, { cancelLabel: 'Close', wide: true }).then(async (res) => {
     if (res && res.__action === 'editBlock') {
       const blk = await db.get(db.STORES.blocks, res.blockId);
       if (blk) await editBlock(blk, session, roster);
+      const again = await db.get(db.STORES.sessions, session.id);
+      if (again) await openSessionSummary(again);
+      return;
+    }
+    if (res && res.__action === 'reorder') {
+      await saveOrder(session, res.ids);
       const again = await db.get(db.STORES.sessions, session.id);
       if (again) await openSessionSummary(again);
       return;

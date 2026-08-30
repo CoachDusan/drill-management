@@ -3,7 +3,7 @@
 import { h, field } from './ui.js';
 import {
   INTENSITY, intensityInfo, intensityBand,
-  COURT_LEVELS, SITUATION_OPTIONS, situationOption, RHYTHM_LEVELS,
+  COURT_LEVELS, SITUATION_OPTIONS, situationOption, RHYTHM_LEVELS, rhythmLabel,
   TISSUE, TISSUE_LEVELS, deriveIntensity,
 } from './models.js';
 
@@ -110,8 +110,12 @@ export function intensityGrid(drill, onChange) {
   const rhythmSel = h('select', {
     onchange: (e) => { rhythm = Number(e.target.value); paint(); },
   });
+  /* Both wordings on every level, because they are one dial and he thinks in
+     whichever suits the drill. "Rare stops" is how you rate a scrimmage;
+     "3 lengths, then stop" is how you rate a rep-based transition drill —
+     and it is the wording the 43 imported library drills were rated against. */
   RHYTHM_LEVELS.forEach((l) => rhythmSel.appendChild(
-    h('option', { value: l.value, selected: l.value === rhythm }, l.label)));
+    h('option', { value: l.value, selected: l.value === rhythm }, `${l.label} — ${l.lengths.toLowerCase()}`)));
   rhythmSel.value = String(rhythm);
 
   const rhythmNote = h('div', { class: 'tiny', style: { marginTop: '4px' } });
@@ -120,14 +124,20 @@ export function intensityGrid(drill, onChange) {
   function paint() {
     const value = deriveIntensity(court, situation, rhythm, contact);
     const r = RHYTHM_LEVELS.find((l) => l.value === rhythm);
-    rhythmNote.textContent = r ? r.note : '';
+    rhythmNote.textContent = r ? `${r.note} How far a length runs is set by the court above, so the two together already say how much transition there is.` : '';
 
-    // Say the flat spot out loud rather than letting him find it and assume
-    // the app is broken. At five players the situation scale has bottomed out,
-    // and the club's own matched pair says the real gap is about 0.25.
-    sitNote.textContent = situation === 1
-      ? '5v5 and 5v0 come out the same. The measured pair differs by 0.25 — less than this grid\u2019s own error. Use Rhythm to separate them: a non-stop 5v5 is not the same drill as one full of whistles.'
-      : (contact ? '' : 'Unopposed work rates about one level easier than the same drill contested.');
+    // Say the flat spots out loud rather than letting him find one and assume
+    // the app is broken. Two of them:
+    //  - at five players the situation scale has bottomed out, and the club's
+    //    own matched pair says the real gap between 5v5 and 5v0 is about 0.25;
+    //  - at Stationary the matchup axis has nothing to scale at all.
+    if (court === 1) {
+      sitNote.textContent = 'On the spot the matchup stops counting — 1v0 and 5v5 give the same number, because a free-throw line does not get harder when fewer people stand on it. Stationary work floors at 2.0; for anything lighter than that use “My own rating”.';
+    } else {
+      sitNote.textContent = situation === 1
+        ? '5v5 and 5v0 come out the same. The measured pair differs by 0.25 — less than this grid\u2019s own error. Use Rhythm to separate them: a non-stop 5v5 is not the same drill as one full of whistles.'
+        : (contact ? '' : 'Unopposed work rates about one level easier than the same drill contested.');
+    }
 
     readout.innerHTML = '';
     readout.append(
@@ -169,7 +179,7 @@ function describe(court, situation, rhythm, contact) {
   const c = COURT_LEVELS.find((l) => l.value === court);
   const r = RHYTHM_LEVELS.find((l) => l.value === rhythm);
   const s = situationOption(situation, contact);
-  return `${c ? c.label : ''} · ${s ? s.label : ''} · ${r ? r.label.toLowerCase() : ''}`;
+  return `${c ? c.label : ''} · ${s ? s.label : ''} · ${r ? rhythmLabel(r.value).toLowerCase() : ''}`;
 }
 
 /* ---- movement demand tags --------------------------------------------

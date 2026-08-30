@@ -122,6 +122,84 @@ export function selectInput(options, value, props = {}) {
   return sel;
 }
 
+/* ---- drag to reorder ---------------------------------------------------
+ *
+ * Practice does not always get recorded in the order it happened — a clock
+ * gets started late, two groups stop out of sequence, a drill is logged from
+ * memory afterwards. So the running order has to be draggable.
+ *
+ * Pointer events, not HTML5 drag-and-drop: HTML5 dnd does not fire from a
+ * finger, and this runs on a tablet. The drag starts from a grip handle rather
+ * than the row itself, so tapping a row still opens it — a whole-row drag
+ * would swallow every tap.
+ *
+ * `onReorder` is handed the ids in their new order, once, on drop.
+ */
+export function reorderable(container, onReorder) {
+  let dragging = null;
+  let moved = false;
+
+  container.addEventListener('pointerdown', (e) => {
+    const grip = e.target && e.target.closest ? e.target.closest('[data-grip]') : null;
+    if (!grip) return;
+    const row = grip.closest('[data-id]');
+    if (!row) return;
+
+    dragging = row;
+    moved = false;
+    row.classList.add('dragging');
+    if (grip.setPointerCapture) grip.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  container.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    const after = rowAfter(container, e.clientY, dragging);
+    if (after === dragging) return;
+    moved = true;
+    if (after) container.insertBefore(dragging, after);
+    else container.appendChild(dragging);
+  });
+
+  const end = () => {
+    if (!dragging) return;
+    dragging.classList.remove('dragging');
+    dragging = null;
+    if (!moved) return;
+    const ids = [...container.querySelectorAll('[data-id]')].map((el) => el.getAttribute('data-id'));
+    onReorder(ids);
+  };
+  container.addEventListener('pointerup', end);
+  container.addEventListener('pointercancel', end);
+
+  return container;
+}
+
+/** The row the dragged one should be inserted before, given a pointer Y. */
+function rowAfter(container, y, dragging) {
+  let best = null;
+  let bestOffset = Number.NEGATIVE_INFINITY;
+  for (const el of container.querySelectorAll('[data-id]')) {
+    if (el === dragging) continue;
+    const box = el.getBoundingClientRect();
+    const offset = y - box.top - box.height / 2;
+    if (offset < 0 && offset > bestOffset) { bestOffset = offset; best = el; }
+  }
+  return best;
+}
+
+/** A grip the finger can grab without stealing the row's own tap. */
+export function grip() {
+  return h('span', {
+    'data-grip': '1',
+    class: 'grip',
+    title: 'Drag to reorder',
+    text: '\u2261',
+    onclick: (e) => e.stopPropagation(),
+  });
+}
+
 export function emptyState(icon, title, message, action) {
   return h('div', { class: 'empty' }, [
     h('div', { class: 'big', text: icon }),

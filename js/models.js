@@ -54,12 +54,40 @@ export const INTENSITY = [
  * situation one level when there is no defence absorbs that without adding a
  * fudge factor — a 3v0 behaves like a 4v4.
  *
- * Checked against 22 measured drill values spanning all three source images:
- * R-squared 0.93, mean error 0.44 on a 1-10 scale. See tests/intensity.test.js.
+ * Checked against 27 measured drill values spanning all three source images:
+ * R-squared 0.934, mean error 0.47 on a 1-10 scale. See tests/intensity.test.js.
  *
  * Contact still matters enormously — but for INJURY RISK, not for intensity.
  * It is therefore tracked as exposure (contact minutes) alongside the movement
  * tags, and deliberately kept out of the load number.
+ *
+ * ---- STATIONARY_FLOOR ----
+ *
+ * The coach entered free throws as Stationary + 1v0 and got 6.7, and 4.0 even
+ * with the rhythm all the way down. He is right that this is nonsense; free
+ * throws are a 1.
+ *
+ * The cause is extrapolation, not a broken formula. In all 27 measured drills
+ * the adjusted situation NEVER exceeds the court level — nobody runs 1v1 in a
+ * phone booth, so few-players-on-a-small-court is a corner the data has never
+ * visited. The grid kept climbing there anyway, because SITUATION is a proxy
+ * for how much of the court's ground falls to each player, and it was being
+ * applied where there is no ground to fall to anybody.
+ *
+ * So: at Stationary the matchup axis drops to its floor. It has nothing left
+ * to scale. 1v0 and 5v5 come out the same on the spot, which is the honest
+ * answer — a free-throw line does not get harder because fewer people are
+ * standing on it.
+ *
+ * This changes NOTHING about the fit: R-squared 0.934 and mean error 0.471 are
+ * identical with and without it, because no measured drill is in the corner it
+ * touches. It also changes nothing in the 43-drill library. It only stops the
+ * grid inventing numbers where it was never tested.
+ *
+ * The floor of the grid is still 2.0 by construction — (1+1+1)/3 x 2 — and the
+ * club's own two measured stationary drills came in at 1.50 and 1.62, so 2.0 is
+ * about right for spot shooting. For anything genuinely lighter than that, the
+ * grid is the wrong tool and `manual` mode (1-10) is the right one.
  */
 
 export const COURT_LEVELS = [
@@ -70,6 +98,9 @@ export const COURT_LEVELS = [
   { value: 1, label: 'Stationary',         note: 'Spot work, little or no travel' },
 ];
 
+/* How much of the court's ground falls to each player. Fewer players means
+ * more ground each and less standing about — which is why this is meaningless
+ * at Stationary, where there is no ground. See STATIONARY_FLOOR above. */
 export const SITUATION_LEVELS = [
   { value: 5, label: '1v1', note: 'Nowhere to hide, no rest in the possession' },
   { value: 4, label: '2v2', note: 'Also 2v1' },
@@ -113,6 +144,46 @@ export function situationOption(situation, contact) {
       || SITUATION_OPTIONS[SITUATION_OPTIONS.length - 2];
 }
 
+/* ---- how a drill run gets grouped in a report -------------------------
+ *
+ * The coach's own weekly table has rows the drill categories cannot produce:
+ *
+ *   Contact 1on1/2on2,..   contested, small-sided
+ *   Contact 5on5           contested, full squad on the floor
+ *   Whole contact          the two added together
+ *
+ * Those are not categories — he already owns the category list and it is
+ * about what a drill is FOR (defence, transition), not who is in it. They
+ * come out of the grid instead: `contact` says whether anyone was defending,
+ * `situation` says how many were sharing the floor.
+ *
+ * `unknown` is a real fourth answer, not a bucket to hide things in. A run
+ * recorded before drill runs snapshotted their matchup, whose drill has since
+ * been deleted from the library, cannot be classified — and a contact total
+ * that quietly leaves such runs out is a contact total he would trust and
+ * should not. Same rule as an untimed clock and an unrated drill.
+ */
+export const MATCHUP_BANDS = [
+  { key: 'contact5',     label: 'Contact 5on5',        note: 'Contested, whole squad on the floor' },
+  { key: 'contactSmall', label: 'Contact 1on1/2on2…',  note: 'Contested, small-sided' },
+  { key: 'unopposed',    label: 'No defence',          note: 'Pattern work, shooting, walk-through' },
+  { key: 'unknown',      label: 'Matchup not recorded',note: 'Run predates the matchup snapshot and its drill is gone' },
+];
+
+export function matchupBand(situation, contact) {
+  if (contact === false) return 'unopposed';
+  const s = Number(situation);
+  if (!Number.isFinite(s) || s < 1 || s > 5) return 'unknown';
+  return s === 1 ? 'contact5' : 'contactSmall';
+}
+
+export function matchupInfo(key) {
+  return MATCHUP_BANDS.find((b) => b.key === key) || MATCHUP_BANDS[3];
+}
+
+/** The two bands that add up to "Whole contact". */
+export const CONTACT_BANDS = ['contact5', 'contactSmall'];
+
 export const CONTACT_LEVELS = [
   { value: true,  label: 'Live defence',  note: 'Contested. Someone is trying to stop them.' },
   { value: false, label: 'No defence',    note: 'Unopposed pattern work — 5v0, 3v0, shooting, walk-through.' },
@@ -130,12 +201,26 @@ export const CONTACT_LEVELS = [
  * court-length anchors are kept in the notes so the 43 imported library drills,
  * which were rated against that wording, still mean what they meant. */
 export const RHYTHM_LEVELS = [
-  { value: 5, label: 'Non-stop',        note: 'Nothing interrupts it. Continuous 5v5, Spanish, rolling transition.' },
-  { value: 4, label: 'Rare stops',      note: 'Long runs between breaks. Around three lengths; a scrimmage with few whistles.' },
-  { value: 3, label: 'Regular stops',   note: 'Whistles, free throws, subs. Around two lengths between breaks.' },
-  { value: 2, label: 'Frequent stops',  note: 'One length, or one possession, then a reset.' },
-  { value: 1, label: 'Stop-start',      note: 'Reset after every rep. Half-court action, then stop.' },
+  { value: 5, label: 'Non-stop',        lengths: 'No rep limit',        note: 'Nothing interrupts it. Continuous 5v5, Spanish, rolling transition.' },
+  { value: 4, label: 'Rare stops',      lengths: '3 lengths, then stop', note: 'Long runs between breaks. A scrimmage with few whistles.' },
+  { value: 3, label: 'Regular stops',   lengths: '2 lengths, then stop', note: 'Whistles, free throws, subs, roughly every second trip.' },
+  { value: 2, label: 'Frequent stops',  lengths: '1 length, then stop',  note: 'One length, or one possession, then a reset.' },
+  { value: 1, label: 'Stop-start',      lengths: 'Half-court action, then stop', note: 'Reset after every rep.' },
 ];
+
+/** Both wordings for one rhythm level: "Rare stops \u00b7 3 lengths, then stop".
+ *
+ * The coach asked for the court-length dial back alongside the stoppage
+ * wording. They are not two dials — they are the same dial, and the lengths
+ * wording is the one the 43 imported library drills were rated against. Court
+ * size is what says how far a "length" actually is, so court x rhythm already
+ * spans the transition question: a non-stop 5v5 full court derives 8.0, the
+ * same drill half court derives 6.0. Adding a fourth transitions input would
+ * count the same fact three times, with no data to set its weight. */
+export function rhythmLabel(level) {
+  const r = RHYTHM_LEVELS.find((l) => l.value === Number(level));
+  return r ? `${r.label} \u00b7 ${r.lengths.toLowerCase()}` : '';
+}
 
 /**
  * Average the three levels and put the result on the same 1-10 scale the rest
@@ -148,7 +233,11 @@ export function deriveIntensity(court, situation, rhythm, contact = true) {
   const c = clampLevel(court);
   const r = clampLevel(rhythm);
   // Unopposed work behaves like one situation level fewer. See the note above.
-  const s = clampLevel(contact === false ? clampLevel(situation) - 1 : situation);
+  let s = clampLevel(contact === false ? clampLevel(situation) - 1 : situation);
+  // STATIONARY EMPTIES THE MATCHUP AXIS. Situation measures how much of the
+  // court's ground falls to each player; at Stationary there is no ground, so
+  // it has nothing to scale and drops to its floor. See STATIONARY_FLOOR.
+  if (c === 1) s = 1;
   return Math.round((((c + s + r) / 3) * 2) * 10) / 10;
 }
 
@@ -405,7 +494,14 @@ export function makeBlock(fields = {}) {
     intensity: 5,            // snapshot, adjustable in the moment
     tissue: { jump: null, sprint: null, cod: null }, // snapshot too
     contact: true,           // snapshot: was this contested?
+    situation: null,         // snapshot: how many were sharing the floor (1-5).
+                             // Null on runs recorded before the reports needed
+                             // it, which fall back to the library exactly as
+                             // `category` does. No migration, no schema bump.
     group: 'Team',           // 'Team', or a station name when practice splits
+    order: null,             // hand-set running order. Null on every run recorded
+                             // before drag-to-reorder existed, which sorts by
+                             // createdAt as it always did. No migration.
     startedAt: null,
     endedAt: null,
     elapsedMs: 0,            // accumulated, so pause/resume works

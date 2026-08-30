@@ -133,6 +133,10 @@ function drillRow(d, root) {
       tagged
         ? h('div', { class: 'tiny', style: { marginTop: '2px' }, text: tissueSummary(d) })
         : h('div', { class: 'tiny', style: { marginTop: '2px', color: 'var(--watch)' }, text: 'No movement tags yet' }),
+      // The setup and the variations, under the drill, without opening it.
+      // `.run-note` rather than `.tiny` so a note written on three lines is
+      // still on three lines here — same class the practice screen uses.
+      d.notes ? h('div', { class: 'run-note', text: d.notes }) : null,
     ]),
     h('span', { class: 'tiny', text: '›', style: { fontSize: '22px' } }),
   ]);
@@ -317,6 +321,7 @@ async function backfillUnratedRuns(drill) {
       intensity,
       tissue: { ...(drill.tissue || { jump: null, sprint: null, cod: null }) },
       contact: drill.contact !== false,
+      situation: drill.situation === undefined ? null : drill.situation,
       unrated: false,
     });
   }

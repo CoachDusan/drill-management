@@ -17,7 +17,10 @@
  * roll-up therefore carries its own coverage, and the screen has to say so.
  */
 
-import { TISSUE, toDateKey, addDays, GAME_DAY_ORDER, isGameWeekDay } from './models.js';
+import {
+  TISSUE, toDateKey, addDays, fromDateKey, formatDate,
+  GAME_DAY_ORDER, isGameWeekDay, matchupBand, matchupInfo, CONTACT_BANDS,
+} from './models.js';
 import {
   blockMinutes, blockLoad, blockTissue, blockContactMinutes,
   participationOf, blockLiveMinutes,
@@ -606,5 +609,344 @@ export function comparePeriods(days, window = 7) {
     minutes: recent.reduce((s, d) => s + d.minutes, 0),
     trainingDays: recent.filter((d) => d.minutes > 0).length,
     coverage: windowCoverage(recent).fraction,
+  };
+}
+
+/* ======================================================================
+   Reports
+   ======================================================================
+
+   Stage 4 answered "what does a GD-1 look like". This answers the question
+   he asked next, which is narrower and more practical: over a stretch of
+   dates I choose, how many minutes went into each category and each drill,
+   and how many of those minutes were live.
+
+   Three things shape everything below.
+
+   FULL TIME AND LIVE TIME, ALWAYS TOGETHER. He runs the second stopwatch
+   mainly on live and scrimmage work, so the drills he most wants reported
+   are exactly the ones that have a live figure. "25 min full, 15 min live"
+   is the sentence; a percentage on its own is not one he can plan with, and
+   minutes on their own do not compare a 40-minute scrimmage to a 10-minute
+   one. Both, in that order, everywhere.
+
+   COVERAGE TRAVELS WITH EVERY LIVE FIGURE. A bucket's live minutes are the
+   live minutes of the drills he timed. If he timed two of six, the bucket is
+   not 30% live — it is 30% live across the third of it he measured, and the
+   report has to say which. `liveCoverage` is on every row for that reason.
+
+   PERIODS ARE CALENDAR PERIODS, NOT ROLLING WINDOWS. "Last 28 days" answers
+   a training-load question; "October" answers a planning question, and this
+   is the planning screen. A week runs Monday to Sunday.
+*/
+
+/** Monday of the week a date falls in. Basketball weeks start on Monday. */
+export function startOfWeek(dateKey) {
+  const d = fromDateKey(dateKey);
+  const shift = (d.getDay() + 6) % 7;   // Sunday(0) -> 6, Monday(1) -> 0
+  return addDays(dateKey, -shift);
+}
+
+/** Inclusive day count between two date keys. */
+export function daysBetween(from, to) {
+  return Math.round((fromDateKey(to) - fromDateKey(from)) / 86400000) + 1;
+}
+
+export function startOfMonth(dateKey) { return `${dateKey.slice(0, 7)}-01`; }
+export function endOfMonth(dateKey) {
+  const d = fromDateKey(startOfMonth(dateKey));
+  d.setMonth(d.getMonth() + 1);
+  return toDateKey(new Date(d.getTime() - 86400000));
+}
+export function startOfYear(dateKey) { return `${dateKey.slice(0, 4)}-01-01`; }
+export function endOfYear(dateKey) { return `${dateKey.slice(0, 4)}-12-31`; }
+
+/** The periods the report screen offers, plus the custom from/till. */
+export const REPORT_PERIODS = [
+  { key: 'day',    label: 'Day' },
+  { key: 'week',   label: 'Week' },
+  { key: 'month',  label: 'Month' },
+  { key: 'year',   label: 'Year' },
+  { key: 'custom', label: 'Choose dates' },
+];
+
+/** The calendar period containing `anchor`. */
+export function periodRange(period, anchor, custom = null) {
+  if (period === 'custom' && custom) {
+    const from = custom.from <= custom.to ? custom.from : custom.to;
+    const to = custom.from <= custom.to ? custom.to : custom.from;
+    return { from, to, period, label: `${formatDate(from, { weekday: false })} – ${formatDate(to, { weekday: false })}` };
+  }
+  if (period === 'day') return { from: anchor, to: anchor, period, label: formatDate(anchor) };
+  if (period === 'week') {
+    const from = startOfWeek(anchor);
+    const to = addDays(from, 6);
+    return { from, to, period, label: `${formatDate(from, { weekday: false })} – ${formatDate(to, { weekday: false })}` };
+  }
+  if (period === 'month') {
+    const from = startOfMonth(anchor);
+    return { from, to: endOfMonth(anchor), period, label: monthLabel(from) };
+  }
+  return { from: startOfYear(anchor), to: endOfYear(anchor), period, label: anchor.slice(0, 4) };
+}
+
+function monthLabel(dateKey) {
+  return fromDateKey(dateKey).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
+
+/**
+ * Split a range into the columns of his table.
+ *
+ * A weekly report has one column per DAY (his first image: 8.12. GD-3,
+ * 9.12. GD-2, 10.12. GD-1). A monthly report has one column per WEEK (his
+ * second image: Week1 6.10.-13.10.). So the column unit follows the period
+ * rather than being a separate choice he has to make.
+ *
+ * Days with nothing recorded are dropped from a day-column table — a week
+ * has seven days and he trains on four, and five empty columns push the ones
+ * that matter off the side of a tablet. Weeks are kept even when empty,
+ * because an empty week inside a month is information.
+ */
+export function columnUnitFor(period) {
+  if (period === 'day') return 'day';
+  if (period === 'week') return 'day';
+  if (period === 'month') return 'week';
+  if (period === 'year') return 'month';
+  return null;   // custom: chosen by the screen
+}
+
+export function columnsFor(range, unit) {
+  const out = [];
+  let guard = 0;
+  if (unit === 'day') {
+    let c = range.from;
+    while (c <= range.to && guard++ < 400) { out.push({ key: c, from: c, to: c }); c = addDays(c, 1); }
+  } else if (unit === 'week') {
+    let c = startOfWeek(range.from);
+    let n = 1;
+    while (c <= range.to && guard++ < 400) {
+      const end = addDays(c, 6);
+      out.push({
+        key: c, from: c, to: end, index: n,
+        label: `Week ${n} · ${formatDate(c, { weekday: false })} – ${formatDate(end, { weekday: false })}`,
+      });
+      c = addDays(c, 7); n += 1;
+    }
+  } else {
+    let c = startOfMonth(range.from);
+    while (c <= range.to && guard++ < 400) {
+      out.push({ key: c, from: c, to: endOfMonth(c), label: monthLabel(c) });
+      c = addDays(endOfMonth(c), 1);
+    }
+  }
+  return out;
+}
+
+/* ---- classifying a run -------------------------------------------------- */
+
+/** The matchup band for a run, falling back to the library for old runs. */
+export function blockMatchup(block, library) {
+  if (block.contact === false) return 'unopposed';
+  let s = block.situation;
+  if (s === null || s === undefined) {
+    const d = block.drillId ? library.get(block.drillId) : null;
+    s = d ? d.situation : null;
+  }
+  return matchupBand(s, block.contact !== false);
+}
+
+/**
+ * Every row of his weekly table, in his order, built from one pass over the
+ * runs. Categories are his own vocabulary; the contact rows come out of the
+ * grid; "Whole contact" is the two contact rows added, not a third bucket the
+ * runs are sorted into — a drill belongs to exactly one of them.
+ */
+export function reportRowsFor(blocks, drills = [], { categories = null } = {}) {
+  const library = new Map(drills.map((d) => [d.id, d]));
+  const byCategory = new Map();
+  const byBand = new Map();
+
+  for (const b of blocks) {
+    const cat = categoryOfBlock(b, library);
+    if (!byCategory.has(cat)) byCategory.set(cat, []);
+    byCategory.get(cat).push(b);
+
+    const band = blockMatchup(b, library);
+    if (!byBand.has(band)) byBand.set(band, []);
+    byBand.get(band).push(b);
+  }
+
+  const catKeys = categories
+    ? categories.filter((c) => byCategory.has(c))
+    : [...byCategory.keys()].sort((a, b) =>
+      aggregate(byCategory.get(b)).minutes - aggregate(byCategory.get(a)).minutes);
+
+  const rows = catKeys.map((c) => ({
+    key: `cat:${c}`, kind: 'category', label: c, blocks: byCategory.get(c),
+    ...aggregate(byCategory.get(c)),
+  }));
+
+  for (const band of CONTACT_BANDS) {
+    const list = byBand.get(band) || [];
+    rows.push({
+      key: `band:${band}`, kind: 'matchup', label: matchupInfo(band).label, blocks: list,
+      ...aggregate(list),
+    });
+  }
+
+  const whole = CONTACT_BANDS.flatMap((b) => byBand.get(b) || []);
+  rows.push({
+    key: 'band:whole', kind: 'matchup', label: 'Whole contact', emphasis: true, blocks: whole,
+    ...aggregate(whole),
+  });
+
+  const unknown = byBand.get('unknown') || [];
+  return {
+    rows,
+    // Never silently folded into a contact total. Reported so he knows the
+    // contact rows are short, rather than believing them.
+    unclassified: { runs: unknown.length, ...aggregate(unknown) },
+  };
+}
+
+/**
+ * The table itself: his rows down the side, one column per day or per week.
+ *
+ * Each cell is a full aggregate, so the screen can print "25 min full, 15 min
+ * live" and still know how much of that cell was actually timed.
+ */
+export function reportTable(sessions, blocks, drills, range, unit, { categories = null } = {}) {
+  const dateOf = new Map(sessions.map((s) => [s.id, s.date]));
+  const gameDayOf = new Map(sessions.map((s) => [s.id, s.gameDay || null]));
+  const inRange = blocks.filter((b) => {
+    const d = dateOf.get(b.sessionId);
+    return d && d >= range.from && d <= range.to;
+  });
+
+  const overall = reportRowsFor(inRange, drills, { categories });
+  const rowOrder = overall.rows.map((r) => r.key);
+
+  let columns = columnsFor(range, unit);
+  if (unit === 'day') {
+    // Drop days nobody trained: five empty columns push the four that matter
+    // off the side of a tablet. An empty WEEK inside a month is kept, because
+    // a week off is a fact about the month.
+    const trained = new Set(inRange.map((b) => dateOf.get(b.sessionId)));
+    columns = columns.filter((c) => trained.has(c.key));
+  }
+
+  const cols = columns.map((c) => {
+    const cellBlocks = inRange.filter((b) => {
+      const d = dateOf.get(b.sessionId);
+      return d >= c.from && d <= c.to;
+    });
+    const built = reportRowsFor(cellBlocks, drills, { categories });
+    const byKey = new Map(built.rows.map((r) => [r.key, r]));
+    // The game-week labels of the sessions in this column. A day usually has
+    // one; a week has several, and the header lists them in order.
+    const labels = [...new Set(sessions
+      .filter((s) => s.date >= c.from && s.date <= c.to && cellBlocks.some((b) => b.sessionId === s.id))
+      .map((s) => gameDayOf.get(s.id))
+      .filter(Boolean))];
+    return {
+      ...c,
+      label: c.label || formatDate(c.key),
+      gameDays: labels,
+      cells: rowOrder.map((k) => byKey.get(k) || null),
+      total: aggregate(cellBlocks),
+    };
+  });
+
+  return { range, unit, columns: cols, rows: overall.rows, unclassified: overall.unclassified };
+}
+
+/* ---- one drill, over a chosen stretch of dates --------------------------
+ *
+ * "5on5, HC+2 — 5 times in this period. Longest 25 min / 12:30 live, shortest
+ * 15 min / 8:00, average 20 min / 10:00. Of those, 3 were GD-1: ..."
+ *
+ * The spread is the point. An average on its own hides that the same drill
+ * ran 25 minutes before one game and 10 before the next, and the game-day
+ * split is what turns that from noise into a plan.
+ *
+ * Live minutes are summarised over the TIMED runs only, and `timedRuns` says
+ * how many those were. Counting an untimed run as zero live minutes would
+ * report a shortest-live of 0:00 for a drill he simply did not time.
+ */
+export function drillReport(sessions, blocks, drills, range) {
+  const dateOf = new Map(sessions.map((s) => [s.id, s.date]));
+  const gameDayOf = new Map(sessions.map((s) => [s.id, s.gameDay || null]));
+  const library = new Map(drills.map((d) => [d.id, d]));
+
+  const groups = new Map();
+  for (const b of blocks) {
+    const date = dateOf.get(b.sessionId);
+    if (!date || date < range.from || date > range.to) continue;
+    const key = b.drillId || `name:${String(b.drillName || '').trim().toLowerCase()}`;
+    if (!groups.has(key)) {
+      groups.set(key, { key, drillId: b.drillId || null, name: b.drillName || 'Unnamed drill', runs: [] });
+    }
+    const g = groups.get(key);
+    g.runs.push({ block: b, date, gameDay: gameDayOf.get(b.sessionId) || null });
+    if (date >= (g.lastDate || '')) { g.lastDate = date; g.name = b.drillName || g.name; }
+  }
+
+  return [...groups.values()].map((g) => {
+    const byGameDay = new Map();
+    for (const r of g.runs) {
+      const k = r.gameDay || 'unset';
+      if (!byGameDay.has(k)) byGameDay.set(k, []);
+      byGameDay.get(k).push(r);
+    }
+    const order = [...GAME_DAY_ORDER, 'GD-X', 'unset'];
+    return {
+      key: g.key,
+      drillId: g.drillId,
+      name: g.name,
+      category: categoryOfBlock(g.runs[g.runs.length - 1].block, library),
+      matchup: blockMatchup(g.runs[g.runs.length - 1].block, library),
+      lastDate: g.lastDate,
+      ...spreadOf(g.runs.map((r) => r.block)),
+      byGameDay: order
+        .filter((k) => byGameDay.has(k))
+        .map((k) => ({
+          gameDay: k === 'unset' ? null : k,
+          label: k === 'unset' ? 'Not labelled' : k,
+          ...spreadOf(byGameDay.get(k).map((r) => r.block)),
+        })),
+    };
+  }).sort((a, b) => b.minutes - a.minutes);
+}
+
+/** Count, longest, shortest and average — for full time and for live time. */
+export function spreadOf(blocks) {
+  const mins = blocks.map((b) => blockMinutes(b));
+  const timed = blocks.filter((b) => blockLiveMinutes(b) !== null);
+  const live = timed.map((b) => blockLiveMinutes(b));
+  const liveTotal = live.reduce((s, v) => s + v, 0);
+  const timedTotal = timed.reduce((s, b) => s + blockMinutes(b), 0);
+  const total = mins.reduce((s, v) => s + v, 0);
+
+  return {
+    runs: blocks.length,
+    minutes: total,
+    maxMinutes: mins.length ? Math.max(...mins) : null,
+    minMinutes: mins.length ? Math.min(...mins) : null,
+    meanMinutes: mins.length ? total / mins.length : null,
+
+    timedRuns: timed.length,
+    liveMinutes: live.length ? liveTotal : null,
+    maxLiveMinutes: live.length ? Math.max(...live) : null,
+    minLiveMinutes: live.length ? Math.min(...live) : null,
+    meanLiveMinutes: live.length ? liveTotal / live.length : null,
+
+    // Pooled, never an average of percentages: a 4-minute drill must not
+    // weigh the same as a 40-minute one.
+    liveDensity: timedTotal ? liveTotal / timedTotal : null,
+    liveCoverage: total ? timedTotal / total : 0,
+    load: blocks.reduce((s, b) => s + (blockLoad(b) || 0), 0),
+    coverage: total
+      ? blocks.filter((b) => blockLoad(b) !== null).reduce((s, b) => s + blockMinutes(b), 0) / total
+      : 1,
   };
 }

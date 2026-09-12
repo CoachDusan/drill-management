@@ -219,7 +219,11 @@ export function stat(key, value, { unit = '', note = '', flag = null } = {}) {
 
 /** Download a blob without a server. */
 export function downloadFile(filename, text, type = 'application/json') {
-  const blob = new Blob([text], { type });
+  downloadBlob(filename, new Blob([text], { type }));
+}
+
+/** Save a ready-made file (a PDF report) to the device's Downloads. */
+export function downloadBlob(filename, blob) {
   const url = URL.createObjectURL(blob);
   const a = h('a', { href: url, download: filename });
   document.body.appendChild(a);
@@ -242,6 +246,46 @@ export function pickFile(accept = '.json') {
     });
     document.body.appendChild(input);
     input.click();
+  });
+}
+
+/** Ask for an image and hand back { name, dataUrl }. */
+export function pickImage() {
+  return new Promise((resolve) => {
+    const input = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', class: 'hidden' });
+    input.addEventListener('change', () => {
+      const file = input.files && input.files[0];
+      if (!file) return resolve(null);
+      const reader = new FileReader();
+      reader.onload = () => { resolve({ name: file.name, dataUrl: String(reader.result) }); input.remove(); };
+      reader.onerror = () => { resolve(null); input.remove(); };
+      reader.readAsDataURL(file);
+    });
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+/**
+ * Shrink an image to fit `max` pixels on its longest side, as PNG.
+ *
+ * A logo straight off a phone can be several MB, and it lives in the database
+ * and therefore in every backup file. A few hundred pixels is plenty for the
+ * corner of a PDF. PNG keeps a transparent background transparent.
+ */
+export function shrinkImage(dataUrl, max = 480) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => reject(new Error('That file is not an image this device can read.'));
+    img.src = dataUrl;
   });
 }
 

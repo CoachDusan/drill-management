@@ -822,12 +822,17 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
   const modules = swList.filter((u) => u.indexOf('./js/') === 0);
   const onDisk = [
     'app', 'db', 'models', 'load', 'history', 'ui', 'components',
+    'sync', 'seasons', 'report-doc', 'pdf',
   ].map((n) => `./js/${n}.js`).concat(
     ['practice', 'drills', 'roster', 'analysis', 'reports', 'settings', 'rpe']
       .map((n) => `./js/views/${n}.js`));
 
   const missing = onDisk.filter((f) => modules.indexOf(f) === -1);
   ok('no module is left out of the offline cache', missing.length === 0, missing.join());
+  // The PDF library loads by path, not by import, so nothing else would notice
+  // it missing — until a PDF is made in a gym with no signal.
+  ok('the PDF library is in the offline cache',
+    swList.indexOf('./vendor/jspdf.umd.min.js') !== -1 && swList.indexOf('./vendor/jspdf.plugin.autotable.min.js') !== -1);
 }
 
 /* ======================================================================
@@ -1313,6 +1318,91 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
   await flush();
   contains('all days brings the other practices back', root, '5on5, HC+2');
   ok('and a plain report is totals, not averages', root.textContent.indexOf('Per practice') === -1);
+  reports.teardown();
+}
+
+/* ---- 2026-09-12 stage 4: a PDF from the Reports screen ----
+ * The real renderer runs; only the final save is swapped for a capture. The
+ * PDF must be made from exactly what is on screen — season, phase, dates. */
+{
+  if (typeof TextEncoder === 'undefined') {
+    globalThis.TextEncoder = class { encode(str) { const u = unescape(encodeURIComponent(String(str))); const a = new Uint8Array(u.length); for (let i = 0; i < u.length; i++) a[i] = u.charCodeAt(i); return a; } };
+  }
+  if (typeof TextDecoder === 'undefined') {
+    globalThis.TextDecoder = class { decode(buf) { const a = new Uint8Array(buf || []); let t = ''; for (let i = 0; i < a.length; i++) t += String.fromCharCode(a[i]); try { return decodeURIComponent(escape(t)); } catch (_) { return t; } } };
+  }
+  if (typeof globalThis.navigator === 'undefined') globalThis.navigator = { userAgent: 'jsc' };
+  // The harness's fake window is not globalThis; the library looks things up
+  // on window, so lend it what the real browser would have.
+  if (typeof window !== 'undefined' && window !== globalThis) {
+    for (const k of ['atob', 'btoa', 'TextEncoder', 'TextDecoder', 'navigator']) if (!window[k]) window[k] = globalThis[k];
+  }
+  load('vendor/jspdf.umd.min.js');
+  if (typeof window !== 'undefined' && window !== globalThis && !window.jspdf) window.jspdf = globalThis.jspdf;
+  load('vendor/jspdf.plugin.autotable.min.js');
+  const J = ((globalThis.jspdf && globalThis.jspdf.jsPDF) ? globalThis.jspdf : (typeof window !== 'undefined' && window.jspdf) || {}).jsPDF;
+  ok('the vendored PDF library loads, with its table plugin', !!J && typeof new J().autoTable === 'function');
+
+  const lastModal = () => { const ms = document.body.querySelectorAll('.modal'); return ms[ms.length - 1]; };
+  const clearModals = () => document.body.querySelectorAll('.scrim').forEach((n) => n.remove());
+  const buttons = (node, prefix) => node.querySelectorAll('button').filter((b) => b.textContent.indexOf(prefix) === 0);
+
+  let saved = null;
+  reports.usePdfHooks({
+    engine: async () => J,
+    save: (name, pdf, model) => { saved = { name, head: pdf.output().slice(0, 5), model }; },
+  });
+  await db.setMeta('pdfClubName', 'Test Club');
+
+  root = newRoot();
+  await reports.render(root);
+  await flush();
+  clearModals();
+  buttons(root, 'Inseason')[0].click();
+  await flush();
+  buttons(root, 'All days')[0].click();
+  await flush();
+  buttons(root, 'Choose dates')[0].click();
+  await flush();
+  if (!lastModal()) { buttons(root, 'Change dates')[0].click(); await flush(); }
+  const inputs = lastModal().querySelectorAll('input');
+  inputs[0].value = ago(10);
+  inputs[1].value = TODAY;
+  buttons(lastModal(), 'Show it')[0].click();
+  await flush();
+  clearModals();
+
+  const pdfBtn = buttons(root, 'PDF')[0];
+  ok('Reports has a PDF button', !!pdfBtn);
+  pdfBtn.click();
+  await flush();
+  const dialog = lastModal();
+  ok('it opens a short dialog', !!dialog);
+  contains('offering each practice on its own for a stretch of days', dialog, 'each practice on its own');
+  contains('and says what the screen left out', dialog, 'left out');
+  buttons(dialog, 'Make PDF')[0].click();
+  for (let i = 0; i < 6; i++) await flush();
+  clearModals();
+
+  ok('a real PDF was made and handed to be saved', saved && saved.head === '%PDF-', saved && saved.head);
+  if (saved) {
+    const text = JSON.stringify(saved.model);
+    ok('the PDF has the inseason practice', text.indexOf('IN-drill') !== -1);
+    ok('and not the preseason one the screen left out', text.indexOf('PRE-drill') === -1);
+    ok('its badge names the season and phase', saved.model.badges.indexOf('Test 1/2 · Inseason') !== -1, saved.model.badges.join(' | '));
+    ok('its notes say what was left out, as the screen does', saved.model.footnotes.some((f) => f.indexOf('Inseason only.') === 0));
+    ok('the file is named for the report', /^Report for chosen dates \d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2}\.pdf$/.test(saved.name), saved.name);
+  }
+
+  root = newRoot();
+  await settings.render(root);
+  await flush();
+  contains('Settings has a PDF reports card', root, 'PDF reports');
+  contains('with a logo option', root, 'Add logo');
+  const green = buttons(root, 'Green')[0];
+  ok('colours are offered', !!green);
+  if (green) { green.click(); await flush(); }
+  ok('a colour choice is saved', (await db.getMeta('pdfAccent', null)) === '#1e6b45');
   reports.teardown();
 }
 

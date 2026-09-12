@@ -6,7 +6,8 @@
  */
 
 import * as db from '../db.js';
-import { h, mount, toast, confirmDanger, downloadFile, pickFile, toCSV, openModal, field, textInput } from '../ui.js';
+import { h, mount, toast, confirmDanger, downloadFile, pickFile, toCSV, openModal, field, textInput, pickImage, shrinkImage } from '../ui.js';
+import { ACCENTS } from '../pdf.js';
 import { toDateKey, resolveIntensity, DEFAULT_GROUPS, LIVE_CATEGORIES, LEGACY_LIVE_CATEGORY } from '../models.js';
 import { planLiveSplit, applyLiveSplit } from '../sync.js';
 
@@ -25,6 +26,10 @@ export async function render(root) {
   const liveSplitWaiting = liveSplit.drills.length + liveSplit.runs.length;
   const groups = await db.getMeta('groups', DEFAULT_GROUPS);
   const lastBackup = await db.getMeta('lastBackupAt', null);
+  const [pdfClub, pdfPrepared, pdfAccent, pdfLogo] = await Promise.all([
+    db.getMeta('pdfClubName', ''), db.getMeta('pdfPreparedBy', ''),
+    db.getMeta('pdfAccent', ACCENTS[0].hex), db.getMeta('pdfLogo', null),
+  ]);
   const daysSince = lastBackup
     ? Math.floor((Date.now() - new Date(lastBackup).getTime()) / 86400000)
     : null;
@@ -96,6 +101,9 @@ export async function render(root) {
         h('button', { class: 'btn', onclick: () => exportDrillLibrary() }, 'Save my drills as a file' ),
       ]),
     ]),
+
+    /* ---- what goes on every PDF ---- */
+    pdfCard({ pdfClub, pdfPrepared, pdfAccent, pdfLogo }, root),
 
     /* ---- the coach's own vocabulary ---- */
     h('div', { class: 'card' }, [
@@ -225,6 +233,64 @@ async function splitLive(plan, root) {
   await applyLiveSplit(plan);
   toast(`Split — ${plan.drills.length} drills and ${plan.runs.length} runs re-filed`);
   await render(root);
+}
+
+/* Club name, who prepared it, a colour and a logo — on every PDF from Reports.
+ * Stored on this device like everything else, and included in backups. */
+function pdfCard({ pdfClub, pdfPrepared, pdfAccent, pdfLogo }, root) {
+  const save = (key, label) => async (e) => {
+    await db.setMeta(key, e.target.value.trim());
+    toast(`${label} saved`);
+  };
+  const club = textInput(pdfClub, { placeholder: 'e.g. KK Your Club — U19' });
+  club.addEventListener('change', save('pdfClubName', 'Club name'));
+  const prepared = textInput(pdfPrepared, { placeholder: 'e.g. S&C coach' });
+  prepared.addEventListener('change', save('pdfPreparedBy', 'Name'));
+
+  return h('div', { class: 'card' }, [
+    h('h2', { style: { marginTop: 0 }, text: 'PDF reports' }),
+    h('p', { class: 'small muted' },
+      'What goes on every PDF you make from Reports. Stored on this device only.'),
+    h('div', { class: 'form-row' }, [
+      field('Club or team name', club),
+      field('Prepared by', prepared, 'Optional. Shown under the club name.'),
+    ]),
+
+    h('h3', { style: { marginTop: '14px' }, text: 'Colour' }),
+    h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px' } }, ACCENTS.map((a) => h('button', {
+      class: 'btn btn-sm',
+      title: a.label,
+      'aria-pressed': a.hex === pdfAccent ? 'true' : 'false',
+      style: {
+        background: a.hex, color: '#fff', minWidth: '84px',
+        outline: a.hex === pdfAccent ? '3px solid var(--text)' : 'none', outlineOffset: '2px',
+      },
+      onclick: async () => { await db.setMeta('pdfAccent', a.hex); toast(`${a.label} it is`); await render(root); },
+    }, a.hex === pdfAccent ? `✓ ${a.label}` : a.label))),
+
+    h('h3', { style: { marginTop: '14px' }, text: 'Logo' }),
+    pdfLogo
+      ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' } }, [
+        h('img', { src: pdfLogo, alt: 'Club logo', style: { maxHeight: '64px', maxWidth: '160px', background: '#fff', padding: '4px', borderRadius: '6px', border: '1px solid var(--line)' } }),
+        h('button', { class: 'btn btn-sm', onclick: () => chooseLogo(root) }, 'Change logo'),
+        h('button', { class: 'btn btn-sm btn-danger', onclick: async () => { await db.setMeta('pdfLogo', null); toast('Logo removed'); await render(root); } }, 'Remove logo'),
+      ])
+      : h('button', { class: 'btn btn-sm', onclick: () => chooseLogo(root) }, 'Add logo'),
+    h('p', { class: 'tiny' }, 'PNG or JPG. It is shrunk to a small size before it is stored, so backup files stay small.'),
+  ]);
+}
+
+async function chooseLogo(root) {
+  const picked = await pickImage();
+  if (!picked) return;
+  try {
+    const small = await shrinkImage(picked.dataUrl, 480);
+    await db.setMeta('pdfLogo', small);
+    toast('Logo saved');
+    await render(root);
+  } catch (err) {
+    toast(err && err.message ? err.message : 'That image could not be read');
+  }
 }
 
 async function removeCustom(key, value, root) {

@@ -429,6 +429,9 @@ js/history.js         aggregation across many practices: days, drills,
 js/sync.js            runs that follow the library until their drill is set
                       up; the start-up repair; splitting Live / scrimmage
 js/seasons.js         which season and phase a date belongs to (pure)
+js/report-doc.js      what goes in a PDF report, as plain data (pure)
+js/pdf.js             draws a report document with the vendored jsPDF
+vendor/               jsPDF + AutoTable, checksummed; see vendor/README.md
 js/ui.js              DOM builder, modal, toast, file download/pick
 js/components.js      intensity picker/badge, status dot
 js/app.js             hash router and nav
@@ -439,6 +442,8 @@ tests/history.test.js the aggregation layer, and the honesty rules in it
 tests/intensity.test.js  the grid, the movement tags, and the fit to real data
 tests/library.test.js importing a drill library without destroying practices
 tests/seasons.test.js season and phase boundaries, open ends, validation
+tests/report-doc.test.js  PDF contents: drill order, breakdowns, honesty
+tests/pdf.test.js     renders real PDFs from invented data; can write samples
 tests/harness.js      fake DOM + IndexedDB so views can run headlessly
 tests/views.test.js   smoke tests that every screen renders and saves correctly,
                       and that the offline cache lists every module
@@ -462,6 +467,8 @@ $JSC -m tests/intensity.test.js # the intensity grid + its fit to measured data
 $JSC -m tests/history.test.js   # days, drills, game-day buckets
 $JSC -m tests/library.test.js   # importing a library without destroying practices
 $JSC -m tests/seasons.test.js   # season and phase boundaries
+$JSC -m tests/report-doc.test.js # what goes in a PDF report
+$JSC -m tests/pdf.test.js       # real PDFs; add  -- /some/dir  to write samples
 $JSC -m tests/views.test.js     # every screen renders, saves, and restores
 ```
 
@@ -896,19 +903,72 @@ Change dates, because he asked to set dates *for* a game-day report.
 deliberate breaks (filter not applied, not dividing, unlabelled count hidden)
 were checked to fail.
 
-### Decided, not yet built
+### Stage 4: PDF reports
 
-- **PDF, built inside the app — his choice over Print → Save as PDF.** Offered
-  both with costs: print needs a "Background graphics" tick every time; in-app
-  means a PDF library carried in the app and every layout change is code. He
-  chose one tap and guaranteed colours. The library must be vendored into the
-  repo (no CDN — offline) and added to `sw.js`. Logo stored on the device.
-  Templates he specified: daily (by category); weekly (each practice or all
-  together, by category, by drill with count / min / max / average); monthly
-  (by week and whole month, by drill); yearly (by month); any dates.
-  **Drill order in every PDF: contested 5on5 first, then other contested, then
-  non-contact — within each, most-used first.** Contact first because that is
-  where live time is, and live time is what he reads.
+**Built inside the app, not via the print window — his choice.** Both were put
+to him with costs: print needs "Background graphics" ticked every time or the
+colours vanish; in-app carries a library and every layout change is code. He
+chose one tap and guaranteed colours.
+
+**The library is vendored, not loaded from a CDN** — this runs in a gym with no
+signal. jsPDF 4.2.1 and jsPDF-AutoTable 5.0.8, both MIT, both checked against
+cdnjs's published SHA-512 hashes (`vendor/README.md` has the hashes and the
+upgrade steps). They load only when a PDF is made, so start-up is unaffected,
+and `sw.js` caches them — a test fails if they drop out of the offline list,
+because they are loaded by path and nothing else would notice.
+
+**What goes in a report is decided apart from how it is drawn.**
+`report-doc.js` turns the screen's state into plain sections, tables and
+strings, and is tested without any PDF library. `pdf.js` only lays it out.
+The PDF is built from **exactly** what the Reports screen holds — the same
+sessions after season, phase, dates and game day — and carries the screen's
+own notes about what it left out. A test proves a preseason practice the
+screen excluded does not appear in the PDF.
+
+The five reports he specified, driven by the period on screen (no second place
+to choose dates):
+- **Day** — each practice as it ran, in his dragged order, with notes, then its
+  categories.
+- **Week** — by category (a column per day), by drill; optionally each practice
+  on its own.
+- **Month** — by category (a column per week), by drill; optionally each week
+  on its own page. Empty weeks keep their column but get no page.
+- **Year** — the same with months.
+- **Chosen dates / Season** — follow their column unit.
+
+**Every drill list: contested 5on5, then other contested, then no defence,
+then matchup unknown — most-used first within each, frequency beating
+minutes.** His words; tests prove both halves by breaking each. The screen's
+By drill list now uses the same order.
+
+Layout: landscape A4; a colour band with logo, club name and "prepared by";
+badges for season · phase, game day and practice count; four tiles (practices,
+court time, live time, contact 5on5); tables with repeated headers; notes;
+"Page x of y" and "Prescribed load, not measured load" on every page. A table
+that would split but fits on a fresh page moves there whole, except the first
+table after the tiles. Headers use his own date style, "Week 2 / 2.3.–8.3.".
+
+Honesty carried into the PDF, because it goes to people who never saw the
+screen: untimed is "not timed" or "—", never 0:00; a live figure over part of
+a cell is starred and footnoted; "Per practice" states its divisor; contact rows
+explained; unclassified runs and drills not set up yet are named.
+
+**Fonts: letters Helvetica cannot draw lose their accent (č → c, đ → d)** rather
+than printing as boxes. Embedding a Unicode font would add hundreds of KB to
+every report, and every drill in the club library is plain ASCII today. If he
+starts naming drills in Serbian, that is the thing to revisit.
+
+Branding lives in Settings → PDF reports (`pdfClubName`, `pdfPreparedBy`,
+`pdfAccent`, `pdfLogo` meta keys). A logo is shrunk to 480px PNG before storing,
+because it travels in every backup. A logo that will not decode never stops a
+report.
+
+**Verified by looking, not only by tests.** `tests/pdf.test.js -- <dir> <logo>`
+writes sample PDFs from invented data; they were opened and read page by page,
+and that caught four layout faults no assertion would have: tables leaving
+pages holding three rows, cramped week headers, a tile note printing two
+unrelated percentages side by side, and one group of drills named two ways.
+It cannot show how the file opens on the tablet.
 
 ## Hosting
 

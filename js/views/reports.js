@@ -30,7 +30,9 @@ import { toDateKey, addDays, MATCHUP_BANDS, formatDate } from '../models.js';
 import { fmtMinutes, fmtLoad, fmtDensity } from '../load.js';
 import * as hist from '../history.js';
 import * as seasonsLib from '../seasons.js';
-import { h, mount, emptyState, toast, openModal, field } from '../ui.js';
+import { h, mount, emptyState, toast, openModal, field, downloadBlob } from '../ui.js';
+import { buildReportDoc, reportKind, sortDrillRows } from '../report-doc.js';
+import { loadPdfEngine, renderReportPdf, ACCENTS } from '../pdf.js';
 
 let rootEl = null;
 
@@ -43,6 +45,16 @@ let drillQuery = '';
 let openDrill = null;                    // which drill's game-day split is open
 let phase = null;                        // 'all' | 'preseason' | 'inseason' | 'offseason'; remembered
 let gameDayFilter = null;                // null = all days, else 'GD-6' … 'GD-1'
+let pdfContext = null;                   // exactly what is on screen, for the PDF button
+
+/* How a PDF gets made and saved. Swappable so the tests can run the real
+   renderer headlessly and look at what would have been saved. */
+let pdfEngine = loadPdfEngine;
+let savePdf = (name, pdf) => downloadBlob(name, pdf.output('blob'));
+export function usePdfHooks({ engine, save } = {}) {
+  if (engine) pdfEngine = engine;
+  if (save) savePdf = save;
+}
 
 export function teardown() {}
 
@@ -111,6 +123,24 @@ export async function render(root) {
     ? allSessions.filter((s) => s.date >= range.from && s.date <= range.to && !seasonsLib.inRange(scope, s.date))
     : [];
 
+  /* The PDF is made from exactly this — the same sessions, season, phase, game
+     day and dates as the screen — and says what the screen says about the
+     practices it left out. A PDF that quietly disagreed with the screen it
+     was made from would be worse than no PDF. */
+  pdfContext = {
+    period, unit, range, sessions: shown, blocks, drills,
+    categories: categories && categories.length ? categories : null,
+    scopeLabel: season ? `${season.label} · ${seasonsLib.phaseLabel(phase)}` : null,
+    gameDay: gameDayFilter, perN,
+    notes: [
+      leftOutSummary(leftOut, season, seasonList),
+      gameDayFilter && gdCounts.unset
+        ? `${gdCounts.unset} practice${gdCounts.unset === 1 ? '' : 's'} in these dates ${gdCounts.unset === 1 ? 'has' : 'have'} no game-day label and ${gdCounts.unset === 1 ? 'is' : 'are'} not included.`
+        : null,
+    ].filter(Boolean),
+  };
+  head.appendChild(h('button', { class: 'btn btn-primary', onclick: () => makePdf() }, 'PDF'));
+
   mount(root,
     head,
     scopeBar(season, seasonList),
@@ -120,7 +150,7 @@ export async function render(root) {
     totalsPanel(totals, inRange, perN),
     tablePanel(table, perN),
     unclassifiedNote(table.unclassified),
-    drillPanel(perDrill),
+    drillPanel(sortDrillRows(perDrill)),
   );
 }
 
@@ -163,17 +193,24 @@ function scopeBar(season, list) {
 }
 
 /* Said out loud: a week that looks light may simply be half preseason. */
-function leftOutNote(leftOut, season, list) {
-  if (!leftOut.length) return null;
+function leftOutSummary(leftOut, season, list) {
+  if (!leftOut.length || !season) return null;
   const byPhase = new Map();
   for (const s of leftOut) {
     const sea = seasonsLib.seasonFor(list, s.date);
     const key = sea ? `${seasonsLib.phaseLabel(seasonsLib.phaseOn(sea, s.date, list))}${sea.id === season.id ? '' : ` ${sea.label}`}` : 'outside every season';
     byPhase.set(key, (byPhase.get(key) || 0) + 1);
   }
+  return `${seasonsLib.phaseLabel(phase)} only. ${leftOut.length} practice${leftOut.length === 1 ? '' : 's'} in these dates ${leftOut.length === 1 ? 'is' : 'are'} left out (${[...byPhase.entries()].map(([k, n]) => `${n} ${k}`).join(', ')}).`;
+}
+
+function leftOutNote(leftOut, season, list) {
+  const text = leftOutSummary(leftOut, season, list);
+  if (!text) return null;
+  const cut = text.indexOf(' ') === -1 ? 0 : text.indexOf('only. ') + 6;
   return h('div', { class: 'note', style: { marginBottom: '12px' } }, [
-    h('strong', { text: `${seasonsLib.phaseLabel(phase)} only. ` }),
-    `${leftOut.length} practice${leftOut.length === 1 ? '' : 's'} in these dates ${leftOut.length === 1 ? 'is' : 'are'} left out (${[...byPhase.entries()].map(([k, n]) => `${n} ${k}`).join(', ')}).`,
+    h('strong', { text: text.slice(0, cut) }),
+    text.slice(cut),
   ]);
 }
 
@@ -552,4 +589,71 @@ function spreadRow(label, mins, live) {
     h('td', { class: 'num', text: (live === null || live === undefined) ? '—' : fmtMinutes(live) }),
     h('td', { class: 'num', text: density === null ? '—' : fmtDensity(density) }),
   ]);
+}
+
+/* ---- the PDF ----------------------------------------------------------------
+ *
+ * One button, and a short dialog with only the choices he asked for: each
+ * practice / week / month on its own, or all together; by category; by drill.
+ * Which report it is follows the period on screen, so a month on screen makes
+ * a monthly report — no second place to pick the dates.
+ */
+async function makePdf() {
+  const ctx = pdfContext;
+  if (!ctx) return;
+  const kind = reportKind(ctx.period, ctx.unit);
+  const [clubName, preparedBy, accent, logo] = await Promise.all([
+    db.getMeta('pdfClubName', ''), db.getMeta('pdfPreparedBy', ''),
+    db.getMeta('pdfAccent', ACCENTS[0].hex), db.getMeta('pdfLogo', null),
+  ]);
+  const practices = ctx.sessions.filter((s) => s.date >= ctx.range.from && s.date <= ctx.range.to).length;
+
+  const choice = await openModal('Make a PDF report', (body, done) => {
+    let breakdown = false;
+    const catBox = h('input', { type: 'checkbox', checked: true });
+    const drillBox = h('input', { type: 'checkbox', checked: true });
+    const togetherRow = h('div', { class: 'btn-row' });
+    function paintTogether() {
+      mount(togetherRow,
+        h('button', { class: breakdown ? 'btn btn-sm' : 'btn btn-sm btn-primary', onclick: () => { breakdown = false; paintTogether(); } }, 'All together'),
+        h('button', { class: breakdown ? 'btn btn-sm btn-primary' : 'btn btn-sm', onclick: () => { breakdown = true; paintTogether(); } }, `All together + ${kind.breakdownLabel.toLowerCase()}`));
+    }
+    if (kind.breakdown) paintTogether();
+
+    body.append(
+      h('div', { class: 'name', style: { fontWeight: '700', fontSize: '17px' },
+        text: `${kind.title}${ctx.gameDay ? ` · ${ctx.gameDay}` : ''}` }),
+      h('div', { class: 'tiny', style: { marginBottom: '12px' },
+        text: [ctx.range.label, ctx.scopeLabel, `${practices} practice${practices === 1 ? '' : 's'}`].filter(Boolean).join(' · ') }),
+      kind.key === 'day'
+        ? h('p', { class: 'small' }, 'Each practice that day, drill by drill in the order it ran, with its categories underneath.')
+        : h('div', {}, [
+          h('label', { class: 'field', style: { display: 'flex', gap: '10px', alignItems: 'center' } }, [catBox, h('span', { text: 'By category' })]),
+          h('label', { class: 'field', style: { display: 'flex', gap: '10px', alignItems: 'center' } }, [drillBox, h('span', { text: 'By drill — contact 5on5 first, most-used first' })]),
+          kind.breakdown ? h('div', { style: { marginTop: '8px' } }, [h('div', { class: 'tiny', text: 'Layout' }), togetherRow]) : null,
+        ]),
+      ctx.notes.length ? h('div', { class: 'note', style: { marginTop: '10px' } }, ctx.notes.map((n) => h('div', { text: n }))) : null,
+      !clubName && !logo ? h('p', { class: 'tiny', style: { marginTop: '10px' } },
+        'Add your club name, logo and colour in Settings → PDF reports and they go on every report.') : null,
+    );
+    return () => done({ breakdown, include: { categories: !!catBox.checked, drills: !!drillBox.checked } });
+  }, { confirmLabel: 'Make PDF' });
+
+  if (!choice) return;
+  if (kind.key !== 'day' && !choice.include.categories && !choice.include.drills && !choice.breakdown) {
+    toast('Choose at least one section');
+    return;
+  }
+
+  toast('Making the PDF…');
+  try {
+    const model = buildReportDoc({ ...ctx, include: choice.include, breakdown: choice.breakdown });
+    const JsPDF = await pdfEngine();
+    const pdf = renderReportPdf(model, { clubName, preparedBy, accent, logo }, JsPDF);
+    await savePdf(model.fileName, pdf, model);
+    toast(`Saved “${model.fileName}” — look in Downloads`);
+  } catch (err) {
+    console.error(err);
+    toast(`Could not make the PDF: ${err && err.message ? err.message : err}`);
+  }
 }

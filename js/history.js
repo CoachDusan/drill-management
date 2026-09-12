@@ -263,6 +263,12 @@ function categoryOfBlock(block, library) {
   return (d && d.category) ? d.category : 'Not in the library';
 }
 
+/** The category a single run is reported under — for anything that lists
+ *  runs one by one (a practice sheet in a PDF). Same rules as the tables. */
+export function categoryLabelOf(block, drills = []) {
+  return categoryOfBlock(block, new Map(drills.map((d) => [d.id, d])));
+}
+
 function categoryBreakdown(blocks, library) {
   const map = new Map();
   for (const b of blocks) {

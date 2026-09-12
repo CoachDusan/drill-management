@@ -26,7 +26,7 @@
  */
 
 import * as db from '../db.js';
-import { toDateKey, addDays, MATCHUP_BANDS } from '../models.js';
+import { toDateKey, addDays, MATCHUP_BANDS, formatDate } from '../models.js';
 import { fmtMinutes, fmtLoad, fmtDensity } from '../load.js';
 import * as hist from '../history.js';
 import * as seasonsLib from '../seasons.js';
@@ -42,6 +42,7 @@ let custom = null;                       // { from, to } once he picks dates
 let drillQuery = '';
 let openDrill = null;                    // which drill's game-day split is open
 let phase = null;                        // 'all' | 'preseason' | 'inseason' | 'offseason'; remembered
+let gameDayFilter = null;                // null = all days, else 'GD-6' … 'GD-1'
 
 export function teardown() {}
 
@@ -87,13 +88,24 @@ export async function render(root) {
     ? { ...seasonsLib.closeRange(scope, sessions), period, label: `${season.label} · ${seasonsLib.phaseLabel(phase)}` }
     : hist.periodRange(period, anchor, custom);
   const unit = (period === 'custom' || period === 'season') ? customUnit(range) : hist.columnUnitFor(period);
-  const table = hist.reportTable(sessions, blocks, drills, range, unit, {
+  /* THE GAME-DAY FILTER COMES LAST: season and phase, then the period, then
+     which day before the game. Counts on the buttons are for the dates on
+     screen, so he sees how many practices a GD-1 picture stands on before he
+     taps it. */
+  const periodSessions = sessions.filter((s) => s.date >= range.from && s.date <= range.to);
+  const gdCounts = hist.gameDayCounts(periodSessions);
+  const shown = gameDayFilter ? sessions.filter((s) => s.gameDay === gameDayFilter) : sessions;
+
+  const table = hist.reportTable(shown, blocks, drills, range, unit, {
     categories: categories && categories.length ? categories : null,
   });
-  const inRange = sessions.filter((s) => s.date >= range.from && s.date <= range.to);
+  const inRange = shown.filter((s) => s.date >= range.from && s.date <= range.to);
   const rangeBlocks = blocks.filter((b) => inRange.some((s) => s.id === b.sessionId));
   const totals = hist.aggregate(rangeBlocks);
-  const perDrill = hist.drillReport(sessions, blocks, drills, range);
+  const perDrill = hist.drillReport(shown, blocks, drills, range);
+  // Only a game-day report averages per practice: "what does a GD-1 look
+  // like" is the question. A plain week is read as totals, as before.
+  const perN = gameDayFilter ? inRange.length : null;
 
   const leftOut = season
     ? allSessions.filter((s) => s.date >= range.from && s.date <= range.to && !seasonsLib.inRange(scope, s.date))
@@ -102,11 +114,11 @@ export async function render(root) {
   mount(root,
     head,
     scopeBar(season, seasonList),
-    periodBar(season),
-    rangeHeading(range, inRange),
+    periodBar(season, gdCounts, range),
+    rangeHeading(range, inRange, gdCounts),
     leftOutNote(leftOut, season, seasonList),
-    totalsPanel(totals, inRange),
-    tablePanel(table),
+    totalsPanel(totals, inRange, perN),
+    tablePanel(table, perN),
     unclassifiedNote(table.unclassified),
     drillPanel(perDrill),
   );
@@ -165,7 +177,7 @@ function leftOutNote(leftOut, season, list) {
   ]);
 }
 
-function periodBar(season) {
+function periodBar(season, gdCounts, range) {
   return h('div', {}, [
     h('div', { class: 'util' }, hist.REPORT_PERIODS.filter((p) => p.key !== 'season' || season).map((p) => h('button', {
       class: p.key === period ? 'btn btn-sm btn-primary' : 'btn btn-sm',
@@ -176,6 +188,8 @@ function periodBar(season) {
       },
     }, p.label))),
 
+    gameDayBar(gdCounts, range),
+
     (period === 'custom' || period === 'season') ? null : h('div', { class: 'btn-row', style: { margin: '10px 0 4px' } }, [
       h('button', { class: 'btn btn-sm', onclick: () => { anchor = step(-1); render(rootEl); } }, '‹ Earlier'),
       h('button', { class: 'btn btn-sm', onclick: () => { anchor = toDateKey(new Date()); render(rootEl); } }, 'Today'),
@@ -184,6 +198,26 @@ function periodBar(season) {
 
     period === 'custom' ? h('div', { class: 'btn-row', style: { margin: '10px 0 4px' } }, [
       h('button', { class: 'btn btn-sm', onclick: () => pickDates() }, custom ? 'Change dates' : 'Pick dates'),
+    ]) : null,
+  ]);
+}
+
+/* His second row: the day before the game, with how many practices each has
+   in the dates on screen. When one is picked, the from–till it covers sits
+   right under it with a way to change it — "GD-1, from … till …". */
+function gameDayBar(counts, range) {
+  const btn = (key, label) => h('button', {
+    class: key === gameDayFilter ? 'btn btn-sm btn-primary' : 'btn btn-sm',
+    onclick: () => { gameDayFilter = key; render(rootEl); },
+  }, label);
+  return h('div', { style: { marginTop: '8px' } }, [
+    h('div', { class: 'util' }, [
+      btn(null, 'All days'),
+      ...hist.REPORT_GAME_DAYS.map((g) => btn(g, `${g} · ${counts[g] || 0}`)),
+    ]),
+    gameDayFilter ? h('div', { class: 'btn-row', style: { margin: '8px 0 0', alignItems: 'center' } }, [
+      h('span', { class: 'tiny', text: `${gameDayFilter} practices from ${formatDate(range.from, { weekday: false })} till ${formatDate(range.to, { weekday: false })}` }),
+      h('button', { class: 'btn btn-sm', onclick: () => pickDates() }, 'Change dates'),
     ]) : null,
   ]);
 }
@@ -235,7 +269,20 @@ async function pickDates() {
   await render(rootEl);
 }
 
-function rangeHeading(range, sessions) {
+function rangeHeading(range, sessions, counts) {
+  if (gameDayFilter) {
+    const n = sessions.length;
+    return h('div', { style: { margin: '14px 0 12px' } }, [
+      h('h2', { style: { margin: '0 0 2px' }, text: `${gameDayFilter} · ${range.label}` }),
+      h('div', { class: 'tiny', text: n
+        ? `Taken from ${n} practice${n === 1 ? '' : 's'}${n < 3 ? ' — too few to call it a pattern yet' : ''}`
+        : `No ${gameDayFilter} practices in these dates` }),
+      // Unlabelled practices cannot be reached by any game-day filter, and a
+      // GD-1 count that is short because of them must say so.
+      counts.unset ? h('div', { class: 'tiny', style: { color: 'var(--watch)' },
+        text: `${counts.unset} practice${counts.unset === 1 ? ' has' : 's have'} no game-day label in these dates and cannot be included. Label them from the session summary.` }) : null,
+    ]);
+  }
   const labelled = sessions.filter((s) => s.gameDay).length;
   return h('div', { style: { margin: '14px 0 12px' } }, [
     h('h2', { style: { margin: '0 0 2px' }, text: range.label }),
@@ -249,7 +296,7 @@ function rangeHeading(range, sessions) {
 
 /* ---- the top line -------------------------------------------------------- */
 
-function totalsPanel(t, sessions) {
+function totalsPanel(t, sessions, perN = null) {
   if (!t.runs) {
     return h('div', { class: 'note' },
       'No drills recorded between these dates. Step back a period, or choose different dates.');
@@ -259,13 +306,15 @@ function totalsPanel(t, sessions) {
       h('div', { class: 'stat' }, [
         h('div', { class: 'k', text: 'Court time' }),
         h('div', { class: 'v', text: fmtMinutes(t.minutes) }),
-        h('div', { class: 'n', text: `${t.runs} drill run${t.runs === 1 ? '' : 's'} across ${sessions.length} session${sessions.length === 1 ? '' : 's'}` }),
+        h('div', { class: 'n', text: perN
+          ? `${fmtMinutes(t.minutes / perN)} per practice, across ${perN}`
+          : `${t.runs} drill run${t.runs === 1 ? '' : 's'} across ${sessions.length} session${sessions.length === 1 ? '' : 's'}` }),
       ]),
       h('div', { class: 'stat' }, [
         h('div', { class: 'k', text: 'Live time' }),
         h('div', { class: 'v', text: t.timedRuns ? fmtMinutes(t.liveMinutes) : '—' }),
         h('div', { class: 'n', text: t.timedRuns
-          ? `${fmtDensity(t.liveDensity)} of the ${fmtMinutes(t.timedMinutes)} you timed`
+          ? `${perN ? `${fmtMinutes(t.liveMinutes / perN)} per practice · ` : ''}${fmtDensity(t.liveDensity)} of the ${fmtMinutes(t.timedMinutes)} you timed`
           : 'you did not run the second stopwatch in these dates' }),
       ]),
       h('div', { class: 'stat' }, [
@@ -293,7 +342,7 @@ function totalsPanel(t, sessions) {
 
 /* ---- the table he drew --------------------------------------------------- */
 
-function tablePanel(table) {
+function tablePanel(table, perN = null) {
   if (!table.columns.length) return null;
 
   const unitWord = table.unit === 'day' ? 'day' : table.unit === 'week' ? 'week' : 'month';
@@ -314,6 +363,7 @@ function tablePanel(table) {
               : h('div', { class: 'th-sub', text: '—' }),
           ])),
           h('th', { class: 'num', text: 'Total' }),
+          perN ? h('th', { class: 'num', text: 'Per practice' }) : null,
         ])),
         h('tbody', {}, table.rows.map((row, i) => h('tr', {
           class: row.emphasis ? 'emph' : '',
@@ -326,17 +376,21 @@ function tablePanel(table) {
           ]),
           ...table.columns.map((c) => cell(c.cells[i])),
           cell(row, true),
+          perN ? cell(hist.perPractice(row, perN), true) : null,
         ]))),
         h('tfoot', {}, h('tr', {}, [
           h('td', { text: 'Everything' }),
           ...table.columns.map((c) => cell(c.total)),
           h('td', { class: 'num' }, cellText(sumOf(table.columns.map((c) => c.total)))),
+          perN ? h('td', { class: 'num' }, cellText(hist.perPractice(sumOf(table.columns.map((c) => c.total)), perN))) : null,
         ])),
       ]),
     ]),
 
     h('p', { class: 'tiny', style: { marginTop: '8px' } },
       'Contact rows come from the matchup on the drill, not from its category, so a drill appears in one category row and one contact row. “Whole contact” is the two contact rows added together — it is not a third bucket.'),
+    perN ? h('p', { class: 'tiny' },
+      `“Per practice” divides by all ${perN} ${gameDayFilter} practice${perN === 1 ? '' : 's'} in these dates — including the ones that did not use that row. A category you skipped on one of them counts as zero there, which is how much of it a ${gameDayFilter} really has.`) : null,
   ]);
 }
 

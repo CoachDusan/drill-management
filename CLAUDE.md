@@ -870,11 +870,34 @@ Rules, in the same spirit as coverage everywhere else:
 Deleting a season removes only its dates; its practices are kept and belong to
 no season until dates cover them again.
 
+### Stage 3: the game-day row on Reports
+
+A second row under the periods, in his order: **All days · GD-6 … GD-1**. It
+applies last — season and phase, then the period, then the day before the
+game — so "GD-1 from 21.9 till 31.10, inseason" is Inseason + Choose dates +
+GD-1. When a game day is picked, its from–till sits directly under the row with
+Change dates, because he asked to set dates *for* a game-day report.
+
+- **The count is on the button, before he taps** (`GD-1 · 4`), and the heading
+  says "Taken from 4 practices". Under three it adds "too few to call it a
+  pattern yet" — a GD-1 picture from two practices is not a picture of GD-1.
+- **GD itself is not offered.** Nobody runs a stopwatch on a game, so it could
+  only ever be an empty report.
+- **Unlabelled practices are named.** No filter can reach them, so a short
+  GD-1 count because of them says so, and points at the session summary.
+- **A game-day report adds "Per practice"** — to the court and live tiles, and
+  as a column in the category table. Not asked for; added because "120 minutes
+  of defence across four GD-1s" is not something he can plan with. It divides
+  by **every** practice in the bucket, including ones that skipped that row
+  (`perPractice()`), the same rule as `categoryByGameDay()`, and the footnote
+  says so. A plain week stays totals, as before.
+
+`gameDayCounts()` and `perPractice()` are in `history.js` with tests; three
+deliberate breaks (filter not applied, not dividing, unlabelled count hidden)
+were checked to fail.
+
 ### Decided, not yet built
 
-- **Reports game-day filter.** A row GD-1 … GD-6 under Day / Week / Month /
-  Year / dates, combined with a from–till range, always showing how many
-  practices it stands on.
 - **PDF, built inside the app — his choice over Print → Save as PDF.** Offered
   both with costs: print needs a "Background graphics" tick every time; in-app
   means a PDF library carried in the app and every layout change is code. He

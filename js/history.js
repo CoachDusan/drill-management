@@ -672,6 +672,45 @@ export function endOfMonth(dateKey) {
 export function startOfYear(dateKey) { return `${dateKey.slice(0, 4)}-01-01`; }
 export function endOfYear(dateKey) { return `${dateKey.slice(0, 4)}-12-31`; }
 
+/* ---- the game-day filter on reports (2026-09-12) -------------------------
+ *
+ * "GD-1, from 21.9 till 31.10, and how many practices it is taken from." The
+ * count is the point: a GD-1 picture drawn from two practices is not a
+ * picture of GD-1. GD itself is not offered — nobody runs a stopwatch on a
+ * game, so a GD report could only ever be empty.
+ */
+export const REPORT_GAME_DAYS = GAME_DAY_ORDER.filter((g) => g !== 'GD');
+
+/** How many practices carry each label. Unset is its own count, never 0 of
+ *  something — those practices cannot be reached by any filter. */
+export function gameDayCounts(sessions) {
+  const out = { unset: 0, 'GD-X': 0 };
+  for (const g of GAME_DAY_ORDER) out[g] = 0;
+  for (const s of sessions) {
+    const k = s.gameDay || 'unset';
+    out[k] = (out[k] || 0) + 1;
+  }
+  return out;
+}
+
+/**
+ * One cell divided by the number of practices behind it.
+ *
+ * Divided by EVERY practice in the bucket, not only the ones that used this
+ * category: defence skipped on one GD-1 out of four averages a quarter lower,
+ * which is the honest answer to "how much defence is on a GD-1". Same rule as
+ * categoryByGameDay(). Ratios (live %, coverage) do not change with the divisor.
+ */
+export function perPractice(agg, practices) {
+  if (!agg || !practices) return null;
+  return {
+    ...agg,
+    minutes: agg.minutes / practices,
+    liveMinutes: agg.liveMinutes / practices,
+    timedMinutes: agg.timedMinutes / practices,
+  };
+}
+
 /** The periods the report screen offers, plus the custom from/till. */
 export const REPORT_PERIODS = [
   { key: 'day',    label: 'Day' },

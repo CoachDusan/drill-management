@@ -16,6 +16,7 @@ import {
   drillRollups, categoryMix, playerDaySeries, playerTotals, comparePeriods,
   startOfWeek, startOfMonth, endOfMonth, daysBetween, periodRange, columnUnitFor,
   columnsFor, blockMatchup, reportRowsFor, reportTable, drillReport, spreadOf,
+  gameDayCounts, perPractice, REPORT_GAME_DAYS,
 } from '../js/history.js';
 import { acwrSeries, provisionalNote } from '../js/load.js';
 import { addDays } from '../js/models.js';
@@ -578,6 +579,29 @@ const blk = (sessionId, intensity, minutes, extra = {}) => ({
   // The window is a real filter, not decoration.
   const narrow = drillReport(sessions, blocks, [], { from: D(0), to: D(0) });
   eq('a one-day window sees one run', narrow[0].runs, 1);
+}
+
+/* ---- the game-day filter on reports ---- */
+{
+  const counts = gameDayCounts([
+    ses('a', D(0), { gameDay: 'GD-1' }), ses('b', D(7), { gameDay: 'GD-1' }),
+    ses('c', D(1), { gameDay: 'GD-6' }), ses('d', D(2)), ses('e', D(3), { gameDay: 'GD-X' }),
+  ]);
+  eq('two GD-1 practices are counted', counts['GD-1'], 2);
+  eq('GD-6 is counted', counts['GD-6'], 1);
+  eq('an unlabelled practice is its own count, not dropped', counts.unset, 1);
+  eq('GD-X is its own count too', counts['GD-X'], 1);
+  eq('a label nobody used is a real zero', counts['GD-3'], 0);
+  ok('the report row offers GD-6 first and GD-1 last', REPORT_GAME_DAYS[0] === 'GD-6' && REPORT_GAME_DAYS[REPORT_GAME_DAYS.length - 1] === 'GD-1');
+  ok('and does not offer game day, which has no stopwatch data', REPORT_GAME_DAYS.indexOf('GD') === -1);
+
+  // Defence on 1 of 4 GD-1s, 20 minutes: 5 minutes per GD-1, not 20.
+  const cell = { minutes: 20, liveMinutes: 8, timedMinutes: 20, timedRuns: 1, runs: 1, liveDensity: 0.4, liveCoverage: 1 };
+  const avg = perPractice(cell, 4);
+  eq('per practice divides by every practice in the bucket', avg.minutes, 5);
+  eq('live minutes too', avg.liveMinutes, 2);
+  eq('the live percentage does not change', avg.liveDensity, 0.4);
+  ok('no practices means no average, not zero', perPractice(cell, 0) === null);
 }
 
 print(`\n${pass} passed, ${fail} failed`);

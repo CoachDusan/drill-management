@@ -1257,5 +1257,64 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
   reports.teardown();
 }
 
+/* ---- 2026-09-12 stage 3: the game-day row on Reports ----
+ * "GD-1 … GD-6, with dates from–till, and how many practices it is taken from." */
+{
+  const lastModal = () => { const ms = document.body.querySelectorAll('.modal'); return ms[ms.length - 1]; };
+  const clearModals = () => document.body.querySelectorAll('.scrim').forEach((n) => n.remove());
+  const buttons = (node, prefix) => node.querySelectorAll('button').filter((b) => b.textContent.indexOf(prefix) === 0);
+
+  const end = new Date().toISOString();
+  const a = makeSession({ date: ago(1), gameDay: 'GD-5', label: 'GD5 a', status: 'complete', endedAt: end });
+  const b = makeSession({ date: ago(3), gameDay: 'GD-5', label: 'GD5 b', status: 'complete', endedAt: end });
+  await db.putMany(db.STORES.sessions, [a, b]);
+  await db.putMany(db.STORES.blocks, [
+    makeBlock({ sessionId: a.id, drillName: 'GD5-only drill', category: 'Defense', situation: 1, contact: true,
+      intensity: 6, elapsedMs: 20 * 60000, liveMs: 10 * 60000, endedAt: end }),
+    makeBlock({ sessionId: b.id, drillName: 'GD5-second drill', category: 'Shooting', situation: 1, contact: false,
+      intensity: 3, elapsedMs: 10 * 60000, endedAt: end }),
+  ]);
+
+  root = newRoot();
+  await reports.render(root);
+  await flush();
+  clearModals();
+  buttons(root, 'Whole season')[0].click();
+  await flush();
+  buttons(root, 'Choose dates')[0].click();
+  await flush();
+  if (!lastModal()) { buttons(root, 'Change dates')[0].click(); await flush(); }
+  const inputs = lastModal().querySelectorAll('input');
+  inputs[0].value = ago(3);
+  inputs[1].value = TODAY;
+  buttons(lastModal(), 'Show it')[0].click();
+  await flush();
+  clearModals();
+
+  contains('the game-day row is there', root, 'All days');
+  ok('GD-6 is offered', buttons(root, 'GD-6 ·').length === 1);
+  ok('game day itself is not — it has no stopwatch data', buttons(root, 'GD ·').length === 0);
+  const gd5 = buttons(root, 'GD-5 ·')[0];
+  ok('each button says how many practices it has in these dates', gd5 && gd5.textContent === 'GD-5 · 2', gd5 && gd5.textContent);
+
+  gd5.click();
+  await flush();
+  contains('the report says what it is taken from', root, 'Taken from 2 practices');
+  contains('and that two is not a pattern', root, 'too few to call it a pattern');
+  contains('its from–till is on screen with a way to change it', root, 'GD-5 practices from');
+  contains('GD-5 drills are in it', root, 'GD5-only drill');
+  contains('both of them', root, 'GD5-second drill');
+  ok('a GD-1 drill is not', root.textContent.indexOf('5on5, HC+2') === -1);
+  contains('a game-day report averages per practice', root, 'Per practice');
+  contains('court time per practice is total over every GD-5', root, '15:00 per practice, across 2');
+  contains('unlabelled practices are named, since no filter can reach them', root, 'no game-day label in these dates');
+
+  buttons(root, 'All days')[0].click();
+  await flush();
+  contains('all days brings the other practices back', root, '5on5, HC+2');
+  ok('and a plain report is totals, not averages', root.textContent.indexOf('Per practice') === -1);
+  reports.teardown();
+}
+
 print(`\n${pass} passed, ${fail} failed`);
 if (fail) throw new Error(`${fail} test(s) failed`);

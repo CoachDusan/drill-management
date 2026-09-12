@@ -29,6 +29,7 @@ import * as db from '../db.js';
 import { toDateKey, addDays, MATCHUP_BANDS } from '../models.js';
 import { fmtMinutes, fmtLoad, fmtDensity } from '../load.js';
 import * as hist from '../history.js';
+import * as seasonsLib from '../seasons.js';
 import { h, mount, emptyState, toast, openModal, field } from '../ui.js';
 
 let rootEl = null;
@@ -40,18 +41,33 @@ let anchor = toDateKey(new Date());
 let custom = null;                       // { from, to } once he picks dates
 let drillQuery = '';
 let openDrill = null;                    // which drill's game-day split is open
+let phase = null;                        // 'all' | 'preseason' | 'inseason' | 'offseason'; remembered
 
 export function teardown() {}
 
 export async function render(root) {
   rootEl = root;
 
-  const [sessions, blocks, drills, categories] = await Promise.all([
+  const [allSessions, blocks, drills, categories, seasonList, pickedSeason, savedPhase] = await Promise.all([
     db.getAll(db.STORES.sessions),
     db.getAll(db.STORES.blocks),
     db.getAll(db.STORES.drills),
     db.getMeta('categories', null),
+    db.getMeta('seasons', []),
+    db.getMeta('viewSeasonId', null),
+    db.getMeta('reportPhase', null),
   ]);
+
+  /* SEASON AND PHASE COME FIRST, then the period inside them. "Only inseason
+     practices count" is his rule, so a week that straddles 21.9 shows only
+     its inseason days — and says how many practices it left out. With no
+     season set up, everything counts exactly as it always did. */
+  const season = seasonsLib.viewedSeason(seasonList, pickedSeason);
+  if (phase === null) phase = savedPhase || defaultPhase(season, seasonList);
+  if (season && !seasonsLib.phaseRange(season, phase, seasonList)) phase = 'all';
+  const scope = season ? seasonsLib.phaseRange(season, phase, seasonList) : null;
+  const sessions = season ? allSessions.filter((s) => seasonsLib.inRange(scope, s.date)) : allSessions;
+  if (!season && period === 'season') period = 'week';
 
   const head = h('div', { class: 'page-head' }, [
     h('div', {}, [
@@ -61,14 +77,16 @@ export async function render(root) {
     ]),
   ]);
 
-  if (!sessions.length || !blocks.length) {
+  if (!allSessions.length || !blocks.length) {
     mount(root, head, emptyState('🗓', 'Nothing to report yet',
       'Run a practice or two with the stopwatch and this becomes the week-by-week picture of what you actually did.'));
     return;
   }
 
-  const range = hist.periodRange(period, anchor, custom);
-  const unit = period === 'custom' ? customUnit(range) : hist.columnUnitFor(period);
+  const range = period === 'season'
+    ? { ...seasonsLib.closeRange(scope, sessions), period, label: `${season.label} · ${seasonsLib.phaseLabel(phase)}` }
+    : hist.periodRange(period, anchor, custom);
+  const unit = (period === 'custom' || period === 'season') ? customUnit(range) : hist.columnUnitFor(period);
   const table = hist.reportTable(sessions, blocks, drills, range, unit, {
     categories: categories && categories.length ? categories : null,
   });
@@ -77,10 +95,16 @@ export async function render(root) {
   const totals = hist.aggregate(rangeBlocks);
   const perDrill = hist.drillReport(sessions, blocks, drills, range);
 
+  const leftOut = season
+    ? allSessions.filter((s) => s.date >= range.from && s.date <= range.to && !seasonsLib.inRange(scope, s.date))
+    : [];
+
   mount(root,
     head,
-    periodBar(),
+    scopeBar(season, seasonList),
+    periodBar(season),
     rangeHeading(range, inRange),
+    leftOutNote(leftOut, season, seasonList),
     totalsPanel(totals, inRange),
     tablePanel(table),
     unclassifiedNote(table.unclassified),
@@ -90,9 +114,60 @@ export async function render(root) {
 
 /* ---- choosing the stretch of dates -------------------------------------- */
 
-function periodBar() {
+function defaultPhase(season, list) {
+  // He reports inseason. Once inseason has started, that is where the screen
+  // opens; before it has, there is nothing to show there yet.
+  if (!season || !season.inseason) return 'all';
+  return toDateKey(new Date()) >= season.inseason ? 'inseason' : 'all';
+}
+
+function scopeBar(season, list) {
+  if (!season) {
+    return h('div', { class: 'note', style: { marginBottom: '12px' } }, [
+      h('strong', { text: 'No season set up — every practice is included. ' }),
+      'Set the season and its Preseason / Inseason dates on the Practice screen, and reports can show one phase at a time.',
+    ]);
+  }
+  return h('div', { style: { marginBottom: '10px' } }, [
+    h('div', { class: 'util' }, [
+      list.length > 1
+        ? h('select', {
+          style: { width: 'auto', minHeight: '40px' },
+          onchange: async (e) => { await db.setMeta('viewSeasonId', e.target.value); render(rootEl); },
+        }, seasonsLib.sortSeasons(list).reverse().map((sea) =>
+          h('option', { value: sea.id, selected: sea.id === season.id }, sea.label)))
+        : h('span', { class: 'chip on', style: { alignSelf: 'center' }, text: season.label }),
+      ...['all', 'preseason', 'inseason', 'offseason'].map((k) => {
+        const r = seasonsLib.phaseRange(season, k, list);
+        return h('button', {
+          class: k === phase ? 'btn btn-sm btn-primary' : 'btn btn-sm',
+          disabled: !r,
+          title: r ? '' : 'No start date yet — set it on the Practice screen',
+          onclick: async () => { phase = k; await db.setMeta('reportPhase', k); render(rootEl); },
+        }, r ? seasonsLib.phaseLabel(k) : `${seasonsLib.phaseLabel(k)} · no date`);
+      }),
+    ]),
+  ]);
+}
+
+/* Said out loud: a week that looks light may simply be half preseason. */
+function leftOutNote(leftOut, season, list) {
+  if (!leftOut.length) return null;
+  const byPhase = new Map();
+  for (const s of leftOut) {
+    const sea = seasonsLib.seasonFor(list, s.date);
+    const key = sea ? `${seasonsLib.phaseLabel(seasonsLib.phaseOn(sea, s.date, list))}${sea.id === season.id ? '' : ` ${sea.label}`}` : 'outside every season';
+    byPhase.set(key, (byPhase.get(key) || 0) + 1);
+  }
+  return h('div', { class: 'note', style: { marginBottom: '12px' } }, [
+    h('strong', { text: `${seasonsLib.phaseLabel(phase)} only. ` }),
+    `${leftOut.length} practice${leftOut.length === 1 ? '' : 's'} in these dates ${leftOut.length === 1 ? 'is' : 'are'} left out (${[...byPhase.entries()].map(([k, n]) => `${n} ${k}`).join(', ')}).`,
+  ]);
+}
+
+function periodBar(season) {
   return h('div', {}, [
-    h('div', { class: 'util' }, hist.REPORT_PERIODS.map((p) => h('button', {
+    h('div', { class: 'util' }, hist.REPORT_PERIODS.filter((p) => p.key !== 'season' || season).map((p) => h('button', {
       class: p.key === period ? 'btn btn-sm btn-primary' : 'btn btn-sm',
       onclick: () => {
         period = p.key;
@@ -101,7 +176,7 @@ function periodBar() {
       },
     }, p.label))),
 
-    period === 'custom' ? null : h('div', { class: 'btn-row', style: { margin: '10px 0 4px' } }, [
+    (period === 'custom' || period === 'season') ? null : h('div', { class: 'btn-row', style: { margin: '10px 0 4px' } }, [
       h('button', { class: 'btn btn-sm', onclick: () => { anchor = step(-1); render(rootEl); } }, '‹ Earlier'),
       h('button', { class: 'btn btn-sm', onclick: () => { anchor = toDateKey(new Date()); render(rootEl); } }, 'Today'),
       h('button', { class: 'btn btn-sm', onclick: () => { anchor = step(1); render(rootEl); } }, 'Later ›'),

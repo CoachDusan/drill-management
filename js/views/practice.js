@@ -9,6 +9,7 @@
  */
 
 import * as db from '../db.js';
+import * as seasonsLib from '../seasons.js';
 import {
   makeSession, makeBlock, makeDrill, toDateKey, formatDate, intensityInfo,
   resolveIntensity, TISSUE, DEFAULT_GROUPS, GAME_DAYS, gameDayInfo, drillSnapshot,
@@ -73,17 +74,25 @@ export async function render(root) {
    ====================================================================== */
 
 async function renderIdle(root, sessions) {
-  const [players, drills] = await Promise.all([
+  const [players, drills, seasonList, pickedSeason] = await Promise.all([
     db.getAll(db.STORES.players),
     db.getAll(db.STORES.drills),
+    db.getMeta('seasons', []),
+    db.getMeta('viewSeasonId', null),
   ]);
+  const season = seasonsLib.viewedSeason(seasonList, pickedSeason);
+  const seasonSpan = season ? seasonsLib.phaseRange(season, 'all', seasonList) : null;
 
   const activePlayers = players.filter((p) => p.status === 'active');
   const activeDrills = drills.filter((d) => !d.archived);
   const ready = activePlayers.length > 0 && activeDrills.length > 0;
 
+  // The chosen season only — picking 2027/2028 shows its own, empty, list.
+  // Practices no season claims are counted and named below, never just hidden.
+  const outside = seasonsLib.outsideEverySeason(sessions.filter((s) => s.status === 'complete'), seasonList);
   const recent = sessions
     .filter((s) => s.status === 'complete')
+    .filter((s) => !season || seasonsLib.inRange(seasonSpan, s.date))
     .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))
     .slice(0, 12);
 
@@ -96,7 +105,7 @@ async function renderIdle(root, sessions) {
     // The most recent unrated session, so the nudge is about today's practice
     // rather than something from three weeks ago he is never going back to.
     if (!rated && !awaitingRPE && blocks.length) awaitingRPE = { session: s, players: (s.rosterIds || []).length };
-    recentCards.push(sessionRow(s, blocks, rated));
+    recentCards.push(sessionRow(s, blocks, rated, seasonList));
   }
 
   mount(root,
@@ -106,6 +115,12 @@ async function renderIdle(root, sessions) {
         h('div', { class: 'sub', style: { margin: 0 }, text: 'Start a session, then run the clock on each drill' }),
       ]),
     ]),
+
+    seasonCard(season, seasonList, sessions),
+    outside.length ? h('div', { class: 'note warn', style: { marginBottom: '14px' } }, [
+      h('strong', { text: `${outside.length} practice${outside.length === 1 ? ' is' : 's are'} outside every season. ` }),
+      'They are still recorded, but they are not listed here and not in any season report. Move a season’s start or end date to take them in.',
+    ]) : null,
 
     ready
       ? h('button', {
@@ -137,13 +152,17 @@ async function renderIdle(root, sessions) {
       : null,
 
     recent.length
-      ? h('div', {}, [h('h2', { text: 'Recent sessions' }), h('div', { class: 'list' }, recentCards)])
+      ? h('div', {}, [h('h2', { text: season ? `Recent sessions · ${season.label}` : 'Recent sessions' }), h('div', { class: 'list' }, recentCards)])
+      : season && sessions.some((s) => s.status === 'complete')
+      ? emptyState('📅', `Nothing recorded in ${season.label} yet`,
+        'Practices from other seasons are all still saved. Switch season above to see them.')
       : (ready ? emptyState('⏱', 'No sessions recorded yet',
         'Tap “Start a practice” when the first drill begins. You can also log a session after the fact if you forgot to run the clock.') : null),
   );
 }
 
-function sessionRow(s, blocks, rated) {
+function sessionRow(s, blocks, rated, seasonList = []) {
+  const phase = seasonsLib.phaseOn(seasonsLib.seasonFor(seasonList, s.date), s.date, seasonList);
   const load = sessionTeamLoad(blocks);
   const mins = sessionTeamMinutes(blocks);
   return h('div', { class: 'row clickable', onclick: () => openSessionSummary(s) }, [
@@ -155,13 +174,158 @@ function sessionRow(s, blocks, rated) {
         s.gameDay ? h('span', { class: 'chip on', style: { marginLeft: '8px' }, text: s.gameDay }) : null,
         rated ? h('span', { class: 'chip on', style: { marginLeft: '8px' }, text: 'rated' }) : null,
       ]),
-      h('div', { class: 'tiny', text: `${s.type} · ${blocks.length} drill${blocks.length === 1 ? '' : 's'} · ${Math.round(mins)} min` }),
+      h('div', { class: 'tiny', text: `${s.type}${phase ? ` · ${seasonsLib.phaseLabel(phase)}` : ''} · ${blocks.length} drill${blocks.length === 1 ? '' : 's'} · ${Math.round(mins)} min` }),
     ]),
     h('div', { style: { textAlign: 'right' } }, [
       h('div', { class: 'nums', style: { fontWeight: '700' }, text: fmtLoad(load) }),
       h('div', { class: 'tiny', text: 'AU' }),
     ]),
   ]);
+}
+
+/* ======================================================================
+   The season
+   ======================================================================
+
+   Set here, on the Practice screen, because that is where he asked for it.
+   The dates are all there is: which season and phase a practice belongs to is
+   worked out from its date every time, so moving a date re-sorts every
+   practice with nothing to migrate. See js/seasons.js. */
+
+function fmtDay(key) { return key ? formatDate(key, { weekday: false }) : 'not set'; }
+
+function seasonCard(season, list, sessions) {
+  if (!season) {
+    return h('div', { class: 'note', style: { marginBottom: '16px' } }, [
+      h('strong', { text: 'No season set up. ' }),
+      'Set the season and when Preseason, Inseason and Offseason start, and reports can show one phase at a time — inseason only, for example. Every practice you already recorded is kept either way.',
+      h('div', { class: 'btn-row', style: { marginTop: '10px' } }, [
+        h('button', { class: 'btn btn-sm btn-primary', onclick: () => editSeason(null, list, sessions) }, 'Set up the season'),
+      ]),
+    ]);
+  }
+  const today = toDateKey(new Date());
+  const phase = seasonsLib.phaseOn(season, today, list);
+  const current = seasonsLib.seasonFor(list, today);
+  return h('div', { class: 'card', style: { marginBottom: '16px' } }, [
+    h('div', { class: 'card-head' }, [
+      h('div', {}, [
+        h('div', { class: 'tiny', text: 'Season' }),
+        h('div', { class: 'name', style: { fontSize: '20px', fontWeight: '700' }, text: season.label }),
+        h('div', { class: 'tiny', text: phase
+          ? `Today: ${seasonsLib.phaseLabel(phase)}`
+          : current ? `You are looking at ${season.label}. Today is in ${current.label}.`
+          : 'Today is outside this season' }),
+      ]),
+    ]),
+    h('div', { class: 'tiny', style: { marginTop: '8px' }, text: [
+      `Preseason from ${fmtDay(season.start)}`,
+      `Inseason from ${fmtDay(season.inseason)}`,
+      `Offseason from ${fmtDay(season.offseason)}`,
+      season.end ? `ends ${fmtDay(season.end)}` : null,
+    ].filter(Boolean).join(' · ') }),
+    h('div', { class: 'btn-row', style: { marginTop: '10px' } }, [
+      h('button', { class: 'btn btn-sm', onclick: () => editSeason(season, list, sessions) }, 'Edit dates'),
+      list.length > 1 ? h('button', { class: 'btn btn-sm', onclick: () => switchSeason(list, season) }, 'Switch season') : null,
+      h('button', { class: 'btn btn-sm', onclick: () => editSeason(null, list, sessions) }, '+ New season'),
+    ]),
+  ]);
+}
+
+async function editSeason(existing, list, sessions) {
+  const today = toDateKey(new Date());
+  const sorted = seasonsLib.sortSeasons(list);
+  const latest = sorted[sorted.length - 1];
+  // The very first season starts at the first practice ever recorded, so
+  // nothing already on the tablet lands outside it by accident.
+  const firstPractice = sessions.map((s) => s.date).filter(Boolean).sort()[0];
+  const suggestedStart = existing ? existing.start
+    : !latest ? (firstPractice && firstPractice < today ? firstPractice : today)
+    : (latest.end ? addDaysKey(latest.end, 1) : today);
+
+  const result = await openModal(existing ? `Season ${existing.label}` : 'New season', (body, done) => {
+    const start = h('input', { type: 'date', value: suggestedStart });
+    const label = textInput(existing ? existing.label : seasonsLib.suggestLabel(suggestedStart), { placeholder: 'e.g. 2026/2027' });
+    const inseason = h('input', { type: 'date', value: existing && existing.inseason ? existing.inseason : '' });
+    const offseason = h('input', { type: 'date', value: existing && existing.offseason ? existing.offseason : '' });
+    const end = h('input', { type: 'date', value: existing && existing.end ? existing.end : '' });
+    const errors = h('div', {});
+
+    body.append(
+      field('Season', label),
+      field('Preseason starts', start, 'The first day of this season.'),
+      h('div', { class: 'form-row' }, [
+        field('Inseason starts', inseason, 'Leave blank until you know.'),
+        field('Offseason starts', offseason, 'Leave blank until you know.'),
+      ]),
+      field('Season ends', end, 'Usually blank — the season then runs until the next one starts.'),
+      h('p', { class: 'tiny' },
+        'Every practice belongs wherever its date falls, so you can change these dates at any time and every practice moves with them. Nothing is deleted.'),
+      errors,
+      existing ? h('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
+        h('button', { class: 'btn btn-sm btn-danger', onclick: () => done({ __action: 'delete' }) }, 'Delete this season'),
+      ]) : null,
+    );
+
+    return () => {
+      const candidate = {
+        id: existing ? existing.id : db.newId('sea'),
+        label: label.value.trim(),
+        start: start.value,
+        inseason: inseason.value || null,
+        offseason: offseason.value || null,
+        end: end.value || null,
+      };
+      const problems = seasonsLib.validateSeason(candidate, list);
+      if (problems.length) {
+        mount(errors, h('div', { class: 'note warn' }, problems.map((e) => h('div', { text: e }))));
+        return;
+      }
+      done(candidate);
+    };
+  }, { confirmLabel: existing ? 'Save dates' : 'Add season' });
+
+  if (!result) return;
+  if (result.__action === 'delete') {
+    const ok = await confirmDanger(`Delete season ${existing.label}?`,
+      'Only the season’s dates are removed. Every practice in it is kept, and belongs to no season until you set dates that cover it again.', 'Delete season');
+    if (!ok) return;
+    await db.setMeta('seasons', list.filter((x) => x.id !== existing.id));
+    await db.setMeta('viewSeasonId', null);
+    toast('Season removed — practices kept');
+    return render(rootEl);
+  }
+  await db.setMeta('seasons', [...list.filter((x) => x.id !== result.id), result]);
+  await db.setMeta('viewSeasonId', result.id);
+  toast(existing ? 'Season dates saved' : `${result.label} added`);
+  await render(rootEl);
+}
+
+function addDaysKey(key, n) {
+  const [y, m, d] = key.split('-').map(Number);
+  return toDateKey(new Date(y, m - 1, d + n));
+}
+
+async function switchSeason(list, current) {
+  const picked = await openModal('Switch season', (body, done) => {
+    body.append(
+      h('p', { class: 'tiny', style: { marginTop: 0 } },
+        'Reports and this screen show the season you pick. Nothing is moved or hidden for good — switch back at any time.'),
+      h('div', { class: 'list' }, seasonsLib.sortSeasons(list).reverse().map((sea) => h('div', {
+        class: 'row clickable', onclick: () => done(sea.id),
+      }, [
+        h('div', { class: 'grow' }, [
+          h('div', { class: 'name', text: sea.label }),
+          h('div', { class: 'tiny', text: `from ${fmtDay(sea.start)}` }),
+        ]),
+        sea.id === current.id ? h('span', { class: 'chip on', text: 'showing' }) : null,
+      ]))),
+    );
+    return null;
+  }, { cancelLabel: 'Close' });
+  if (!picked) return;
+  await db.setMeta('viewSeasonId', picked);
+  await render(rootEl);
 }
 
 /* ======================================================================
@@ -180,11 +344,21 @@ function gameDaySelect(value) {
 
 async function startPractice() {
   const players = await db.getAll(db.STORES.players);
+  const seasonList = await db.getMeta('seasons', []);
   const eligible = players.filter((p) => p.status !== 'inactive');
   const preselected = new Set(players.filter((p) => p.status === 'active').map((p) => p.id));
 
   const result = await openModal('Start a practice', (body, done) => {
-    const date = h('input', { type: 'date', value: toDateKey(new Date()) });
+    const whereInSeason = h('div', { class: 'tiny', style: { margin: '-4px 0 10px' } });
+    const paintWhere = () => {
+      const d = date.value || toDateKey(new Date());
+      const sea = seasonsLib.seasonFor(seasonList, d);
+      whereInSeason.textContent = !seasonList.length ? ''
+        : sea ? `${sea.label} · ${seasonsLib.phaseLabel(seasonsLib.phaseOn(sea, d, seasonList))}`
+        : 'This date is outside every season. It still records — change a season’s dates on the Practice screen to take it in.';
+    };
+    const date = h('input', { type: 'date', value: toDateKey(new Date()), onchange: paintWhere, oninput: paintWhere });
+    paintWhere();
     const type = selectInput(SESSION_TYPES, 'Practice');
     const gameDay = gameDaySelect(null);
     const label = textInput('', { placeholder: 'Optional — e.g. pre-game shootaround' });
@@ -220,6 +394,7 @@ async function startPractice() {
 
     body.append(
       h('div', { class: 'form-row' }, [field('Date', date), field('Type', type)]),
+      whereInSeason,
       field('Where is this in the game week?', gameDay,
         'GD-X is anything more than six days out. Leave it unset if you would rather say later — the analysis will tell you which practices are still missing it.'),
       field('Label', label),

@@ -1124,5 +1124,138 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
   reports.teardown();
 }
 
+/* ---- 2026-09-12 stage 2: seasons and phases ----
+ * "Practices till 20.9 are preseason; I want reports for inseason only." A
+ * season is a set of dates; a practice belongs wherever its date falls. */
+{
+  const hist = await import('../js/history.js');
+  const lastModal = () => { const ms = document.body.querySelectorAll('.modal'); return ms[ms.length - 1]; };
+  const buttonIn = (node, text) => node.querySelectorAll('button').filter((b) => b.textContent === text)[0];
+  const clearModals = () => document.body.querySelectorAll('.scrim').forEach((n) => n.remove());
+
+  await db.setMeta('seasons', []);
+  await db.setMeta('viewSeasonId', null);
+  await db.setMeta('reportPhase', null);
+
+  // One practice each side of the boundary, one before the season, each with
+  // a drill whose name says where it belongs.
+  const mk = async (date, label, drillName) => {
+    const se = makeSession({ date, label, status: 'complete', endedAt: new Date().toISOString() });
+    await db.put(db.STORES.sessions, se);
+    await db.put(db.STORES.blocks, makeBlock({ sessionId: se.id, drillName, category: 'Defense', situation: 1, contact: true,
+      intensity: 5, elapsedMs: 12 * 60000, endedAt: new Date().toISOString() }));
+    return se;
+  };
+  await mk(ago(8), 'Preseason practice', 'PRE-drill');
+  await mk(ago(2), 'Inseason practice', 'IN-drill');
+  await mk(ago(200), 'Last spring practice', 'OLD-drill');
+
+  root = newRoot();
+  await practice.render(root);
+  await flush();
+  contains('without a season, Practice offers to set one up', root, 'Set up the season');
+
+  buttonIn(root, 'Set up the season').click();
+  await flush();
+  let modal = lastModal();
+  ok('the season editor opens', !!modal);
+  let inputs = modal.querySelectorAll('input');
+  ok('it asks for a name and four dates', inputs.length === 5, String(inputs.length));
+  ok('the first season starts at the first practice ever recorded, so nothing is left outside',
+    inputs[1].value <= ago(200), inputs[1].value);
+
+  // A mistake first: inseason before preseason.
+  inputs[0].value = 'Test 1/2';
+  inputs[1].value = ago(10);
+  inputs[2].value = ago(20);
+  buttonIn(modal, 'Add season').click();
+  await flush();
+  contains('an impossible order is refused in his words', lastModal(), 'cannot start before preseason');
+  ok('and nothing is saved', (await db.getMeta('seasons', [])).length === 0);
+
+  inputs[2].value = ago(4);          // inseason from 4 days ago
+  buttonIn(lastModal(), 'Add season').click();
+  await flush();
+  const saved = await db.getMeta('seasons', []);
+  ok('the season is saved', saved.length === 1 && saved[0].label === 'Test 1/2' && saved[0].inseason === ago(4));
+  clearModals();
+
+  root = newRoot();
+  await practice.render(root);
+  await flush();
+  contains('the season is on the Practice screen', root, 'Test 1/2');
+  contains('with today’s phase', root, 'Today: Inseason');
+  const inRow = root.querySelectorAll('.row').filter((r) => r.textContent.indexOf('Inseason practice') !== -1)[0];
+  ok('a practice row says which phase it was', inRow && inRow.textContent.indexOf('Inseason') !== -1);
+  const preRow = root.querySelectorAll('.row').filter((r) => r.textContent.indexOf('Preseason practice') !== -1)[0];
+  ok('and so does a preseason one', preRow && preRow.textContent.indexOf('Preseason') !== -1);
+  contains('practices before every season are counted out loud, not hidden', root, 'outside every season');
+  ok('and are not listed in the season',
+    !root.querySelectorAll('.row').some((r) => r.textContent.indexOf('Last spring practice') !== -1));
+
+  /* ---- reports: inseason only ---- */
+  root = newRoot();
+  await reports.render(root);
+  await flush();
+  contains('reports offer the phases', root, 'Preseason');
+  buttonIn(root, 'Inseason').click();
+  await flush();
+  ok('the phase he picks is remembered', (await db.getMeta('reportPhase', null)) === 'inseason');
+
+  buttonIn(root, 'Choose dates').click();
+  await flush();
+  modal = lastModal();
+  inputs = modal.querySelectorAll('input');
+  inputs[0].value = ago(10);
+  inputs[1].value = TODAY;
+  buttonIn(modal, 'Show it').click();
+  await flush();
+  clearModals();
+  // The By drill search is module state; an earlier test left a query in it.
+  const search = root.querySelectorAll('input').filter((i) =>
+    String(i.getAttribute('placeholder') || '').indexOf('Search drills') !== -1)[0];
+  if (search) { search.dispatch('input', { target: { value: '' } }); await flush(); }
+  contains('an inseason report includes the inseason practice', root, 'IN-drill');
+  ok('and leaves the preseason one out', root.textContent.indexOf('PRE-drill') === -1);
+  contains('and says so, rather than letting the dates look light', root, 'Inseason only.');
+  contains('naming what was left out', root, 'Preseason');
+
+  buttonIn(root, 'Whole season').click();
+  await flush();
+  contains('the whole season includes preseason again', root, 'PRE-drill');
+
+  buttonIn(root, 'Season').click();
+  await flush();
+  contains('the Season period is labelled with the season and phase', root, 'Test 1/2 · Whole season');
+  ok('and never reaches back before the season', root.textContent.indexOf('OLD-drill') === -1);
+
+  /* ---- next season starts empty; this one is untouched ---- */
+  const next = { id: 'sea_next', label: 'Next 2/3', start: addDays(TODAY, 1), inseason: null, offseason: null, end: null };
+  await db.setMeta('seasons', [...saved, next]);
+  await db.setMeta('viewSeasonId', next.id);
+  root = newRoot();
+  await practice.render(root);
+  await flush();
+  contains('a new season starts empty', root, 'Nothing recorded in Next 2/3 yet');
+  contains('and says the old practices are still saved', root, 'still saved');
+  contains('switching back is offered', root, 'Switch season');
+  ok('the old season’s practices still exist', (await db.getAll(db.STORES.sessions)).some((x) => x.label === 'Inseason practice'));
+  contains('an undated inseason is not pretended to be empty', (await (async () => {
+    const r = newRoot(); await reports.render(r); await flush(); return r; })()), 'Inseason · no date');
+
+  /* ---- Analysis: Season means this season; load maths unchanged ---- */
+  ok('Season starts at the season start when one is given',
+    hist.rangeFor([{ date: '2026-01-05' }], 'season', '2026-03-01', '2026-02-01').from === '2026-02-01');
+  ok('and at the first practice when none is',
+    hist.rangeFor([{ date: '2026-01-05' }], 'season', '2026-03-01').from === '2026-01-05');
+  root = newRoot();
+  await analysis.render(root);
+  await flush();
+  contains('analysis still renders with seasons set up', root, 'Analysis');
+
+  await db.setMeta('viewSeasonId', null);
+  reports.teardown();
+}
+
 print(`\n${pass} passed, ${fail} failed`);
 if (fail) throw new Error(`${fail} test(s) failed`);

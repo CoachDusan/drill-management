@@ -428,6 +428,7 @@ js/history.js         aggregation across many practices: days, drills,
                       categories, game-day buckets, per-player series
 js/sync.js            runs that follow the library until their drill is set
                       up; the start-up repair; splitting Live / scrimmage
+js/seasons.js         which season and phase a date belongs to (pure)
 js/ui.js              DOM builder, modal, toast, file download/pick
 js/components.js      intensity picker/badge, status dot
 js/app.js             hash router and nav
@@ -437,6 +438,7 @@ tests/load.test.js    unit tests for the maths
 tests/history.test.js the aggregation layer, and the honesty rules in it
 tests/intensity.test.js  the grid, the movement tags, and the fit to real data
 tests/library.test.js importing a drill library without destroying practices
+tests/seasons.test.js season and phase boundaries, open ends, validation
 tests/harness.js      fake DOM + IndexedDB so views can run headlessly
 tests/views.test.js   smoke tests that every screen renders and saves correctly,
                       and that the offline cache lists every module
@@ -459,6 +461,7 @@ $JSC -m tests/load.test.js       # the maths
 $JSC -m tests/intensity.test.js # the intensity grid + its fit to measured data
 $JSC -m tests/history.test.js   # days, drills, game-day buckets
 $JSC -m tests/library.test.js   # importing a library without destroying practices
+$JSC -m tests/seasons.test.js   # season and phase boundaries
 $JSC -m tests/views.test.js     # every screen renders, saves, and restores
 ```
 
@@ -818,14 +821,57 @@ this season's reports would show the old category until the split date and
 the new ones after. Unopposed or matchup-unknown records stay under the old
 name and are counted, not guessed.
 
+### Stage 2: seasons and phases
+
+**A season is a set of dates, not a separate database.** Stored under the
+`seasons` meta key: a name, the day preseason starts, the days inseason and
+offseason start (blank until known), and an optional end — blank means it runs
+until the next season starts. Which season and phase a practice belongs to is
+worked out from its date every time (`js/seasons.js`). So he can move the
+inseason date and every practice re-sorts; picking 2027/2028 shows an empty
+list because nothing is dated in it yet; and 2026/2027's practices never move.
+No schema change, no field on the session.
+
+This is the opposite of the game-day decision on purpose. Game day is a fact
+about one practice he knows before walking in, so it is set by hand on that
+practice. A phase boundary is one date that labels hundreds of practices, and
+he asked to be able to change it.
+
+Set on the **Practice screen**, where he asked for it: a season card (today's
+phase, the phase dates, Edit dates / Switch season / + New season), Recent
+sessions limited to the chosen season with each row's phase, and the Start a
+practice dialog saying which season and phase its date falls in. The very first
+season starts at the first practice ever recorded, so nothing already on the
+tablet is left outside it by accident. His real dates are for him to enter:
+preseason until 20.9.2026 means **Inseason starts 21.9.2026**.
+
+Rules, in the same spirit as coverage everywhere else:
+- **A phase with no start date is not an empty range.** `phaseRange()` returns
+  null and the Reports button reads "Inseason · no date", disabled. An empty
+  inseason would read as "we did nothing".
+- **Practices outside every season are counted out loud** on the Practice
+  screen, never just absent.
+- **Reports: season and phase first, then the period inside them.** A week
+  that straddles 21.9 shows only its inseason days, and a note says how many
+  practices it left out and which phase they were in — otherwise that week
+  just looks light. The phase he picks is remembered (`reportPhase`); before
+  he picks, the screen opens on Inseason once inseason has started. A new
+  "Season" period reports the chosen season or phase whole, with weekly or
+  monthly columns by length. "Year" stays the calendar year.
+- **With no season set up, everything behaves exactly as before.**
+- **Analysis: "Season" now starts at the start of the season today is in**,
+  for the range button and the drill "All season" average. Without that, next
+  year's season average would silently cover two seasons. It follows today,
+  not the season Reports is showing, because Analysis is about now.
+- **ACWR, monotony and weekly load deliberately ignore seasons.** Load does not
+  reset on the day inseason starts; the first inseason week's ACWR needs the
+  preseason weeks behind it. Do not "fix" this.
+
+Deleting a season removes only its dates; its practices are kept and belong to
+no season until dates cover them again.
+
 ### Decided, not yet built
 
-- **Seasons and phases.** A season picker (2026/2027) with Preseason /
-  Inseason / Offseason set as editable date ranges; reports show the chosen
-  season and phase only. It is a filter over one database, not a separate
-  database per season — nothing is lost when he switches. Unlike game day, the
-  phase *is* derived from the date: it is one boundary he sets once, not a
-  fact about each practice. His current season: preseason until 20.9.2026.
 - **Reports game-day filter.** A row GD-1 … GD-6 under Day / Week / Month /
   Year / dates, combined with a from–till range, always showing how many
   practices it stands on.

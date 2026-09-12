@@ -42,13 +42,17 @@ export const RANGES = [
  * the end of the window are part of the picture: monotony and the acute
  * window are both wrong if the series quietly stops at the last session.
  */
-export function rangeFor(sessions, key = '4w', today = toDateKey(new Date())) {
+/* `seasonFrom` is where "Season" starts once seasons are set up. Without it,
+ * Season meant "since the first practice ever recorded" — which next year
+ * would quietly mean two seasons. ACWR and monotony must NOT be given it: load
+ * does not reset on the day a season starts, and they need the history. */
+export function rangeFor(sessions, key = '4w', today = toDateKey(new Date()), seasonFrom = null) {
   const dates = sessions.map((s) => s.date).filter(Boolean).sort();
   const first = dates.length ? dates[0] : today;
   const last = dates.length ? dates[dates.length - 1] : today;
   const to = last > today ? last : today;   // a session dated ahead of today still counts
   const spec = RANGES.find((r) => r.key === key) || RANGES[1];
-  const from = spec.days === null ? first : maxDate(first, addDays(to, -(spec.days - 1)));
+  const from = spec.days === null ? (seasonFrom || first) : maxDate(first, addDays(to, -(spec.days - 1)));
   return { from, to, key: spec.key, label: spec.label, firstEver: first };
 }
 
@@ -389,7 +393,7 @@ export const DRILL_WINDOWS = [
   { key: 'season', label: 'All season',   days: null },
 ];
 
-export function drillWindowAverages(sessions, blocks, drills = [], today = toDateKey(new Date())) {
+export function drillWindowAverages(sessions, blocks, drills = [], today = toDateKey(new Date()), seasonFrom = null) {
   const dateOf = new Map(sessions.map((s) => [s.id, s.date]));
   const library = new Map(drills.map((d) => [d.id, d]));
   const groups = new Map();
@@ -407,7 +411,7 @@ export function drillWindowAverages(sessions, blocks, drills = [], today = toDat
   return [...groups.values()].map((g) => {
     const windows = {};
     for (const w of DRILL_WINDOWS) {
-      const from = w.days === null ? null : addDays(today, -(w.days - 1));
+      const from = w.days === null ? seasonFrom : addDays(today, -(w.days - 1));
       const inWindow = g.runs.filter((r) => from === null || (r.date >= from && r.date <= today));
       const agg = aggregate(inWindow.map((r) => r.block));
       windows[w.key] = {
@@ -674,6 +678,7 @@ export const REPORT_PERIODS = [
   { key: 'week',   label: 'Week' },
   { key: 'month',  label: 'Month' },
   { key: 'year',   label: 'Year' },
+  { key: 'season', label: 'Season' },   // the chosen season or phase, whole
   { key: 'custom', label: 'Choose dates' },
 ];
 

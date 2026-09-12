@@ -18,8 +18,9 @@
  */
 
 import * as db from '../db.js';
+import * as seasonsLib from '../seasons.js';
 import { h, mount, emptyState, openModal } from '../ui.js';
-import { TISSUE, formatDate, GAME_DAY_ORDER } from '../models.js';
+import { TISSUE, formatDate, GAME_DAY_ORDER, toDateKey } from '../models.js';
 import {
   fmtLoad, fmtMinutes, fmtRatio, fmtDensity,
   acwrSeries, monotonySeries, acwrFlag, monotonyFlag, provisionalNote,
@@ -34,12 +35,18 @@ let selectedGD = 'GD-1';    // which game day the category breakdown is showing
 export async function render(root) {
   rootEl = root;
 
-  const [sessions, blocks, players, drills] = await Promise.all([
+  const [sessions, blocks, players, drills, seasonList] = await Promise.all([
     db.getAll(db.STORES.sessions),
     db.getAll(db.STORES.blocks),
     db.getAll(db.STORES.players),
     db.getAll(db.STORES.drills),
+    db.getMeta('seasons', []),
   ]);
+  /* Analysis is about NOW, so "Season" is the season today is in — not the
+     one Reports happens to be showing. Outside every season it falls back to
+     all history, as before seasons existed. */
+  const currentSeason = seasonsLib.seasonFor(seasonList, toDateKey(new Date()));
+  const seasonFrom = currentSeason ? currentSeason.start : null;
 
   const head = h('div', { class: 'page-head' }, [
     h('div', {}, [
@@ -63,7 +70,7 @@ export async function render(root) {
   const acwr = acwrSeries(hist.loadSeries(seasonDays));
   const monotony = monotonySeries(hist.loadSeries(seasonDays));
 
-  const range = hist.rangeFor(sessions, rangeKey);
+  const range = hist.rangeFor(sessions, rangeKey, undefined, seasonFrom);
   const days = seasonDays.filter((d) => d.date >= range.from && d.date <= range.to);
 
   const windowBlocks = days.flatMap((d) => d.blocks);
@@ -76,7 +83,7 @@ export async function render(root) {
      visible window: the whole point is checking a drill's recent behaviour
      against its own longer history, so the window must not clip it. */
   const winByKey = new Map(
-    hist.drillWindowAverages(sessions, blocks, drills).map((w) => [w.key, w.windows]));
+    hist.drillWindowAverages(sessions, blocks, drills, undefined, seasonFrom).map((w) => [w.key, w.windows]));
   rolls.forEach((r) => { r.windows = winByKey.get(r.key) || null; });
 
   mount(root,

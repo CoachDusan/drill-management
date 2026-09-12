@@ -308,7 +308,7 @@ function unclassifiedNote(u) {
   if (!u || !u.runs) return null;
   return h('div', { class: 'note warn' }, [
     h('strong', { text: `${u.runs} run${u.runs === 1 ? '' : 's'} (${fmtMinutes(u.minutes)}) are missing from the contact rows. ` }),
-    'They were recorded before drill runs stored their matchup, and the drill they point at is no longer in the library, so the app cannot tell whether they were contested. They still count in every category row and in the totals.',
+    'The app cannot tell whether they were contested. Usually that is a drill added during practice and not set up yet — open it in Drills, set the matchup, and these runs are counted from then on. Otherwise it is an old run whose drill has been deleted. They still count in the totals.',
   ]);
 }
 
@@ -322,8 +322,19 @@ function unclassifiedNote(u) {
  */
 function drillPanel(rows) {
   if (!rows.length) return null;
-  const matches = rows.filter((r) => !drillQuery
-    || `${r.name} ${r.category || ''}`.toLowerCase().includes(drillQuery.toLowerCase()));
+
+  /* Typing repaints the LIST, never the screen. Re-rendering the whole page on
+     every keystroke destroyed the search box he was typing in, so the keyboard
+     closed and the page jumped back to the top after each letter. */
+  const list = h('div', { class: 'list', style: { marginTop: '12px' } });
+  function paint() {
+    const q = drillQuery.toLowerCase();
+    const matches = rows.filter((r) => !q || `${r.name} ${r.category || ''}`.toLowerCase().includes(q));
+    mount(list, matches.length
+      ? matches.map((r) => drillCard(r, paint))
+      : [h('div', { class: 'tiny', style: { padding: '14px' }, text: 'No drill matches that.' })]);
+  }
+  paint();
 
   return h('div', { style: { marginTop: '26px' } }, [
     h('h2', { text: 'By drill' }),
@@ -331,22 +342,19 @@ function drillPanel(rows) {
       'How often each drill ran in these dates, how long it ran, and how much of that was live. Tap one to split it by day before the game.'),
     h('input', {
       type: 'search', placeholder: 'Search drills or categories…', value: drillQuery,
-      oninput: (e) => { drillQuery = e.target.value; render(rootEl); },
+      oninput: (e) => { drillQuery = e.target.value; paint(); },
     }),
-    h('div', { class: 'list', style: { marginTop: '12px' } },
-      matches.length
-        ? matches.map((r) => drillCard(r))
-        : [h('div', { class: 'tiny', style: { padding: '14px' }, text: 'No drill matches that.' })]),
+    list,
   ]);
 }
 
-function drillCard(r) {
+function drillCard(r, repaint) {
   const open = openDrill === r.key;
   return h('div', { class: 'card', style: { marginBottom: 0 } }, [
     h('div', {
       class: 'card-head clickable',
       style: { cursor: 'pointer' },
-      onclick: () => { openDrill = open ? null : r.key; render(rootEl); },
+      onclick: () => { openDrill = open ? null : r.key; repaint(); },
     }, [
       h('div', { style: { minWidth: 0 } }, [
         h('div', { class: 'name', style: { fontWeight: '650' }, text: r.name }),

@@ -987,5 +987,142 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
   reports.teardown();
 }
 
+/* ---- 2026-09-12: a courtside drill follows the library until it is set up ----
+ * The coach typed a new 5on5 drill in during practice, set it up afterwards in
+ * Drills (Defense, 5v5 live), and the report still filed it under "Skill
+ * development" — the default a new drill is born with, copied into the run as
+ * if it were his answer. */
+{
+  const { drillSnapshot, makeBlock: mkB, GAME_DAY_ORDER, isGameWeekDay } = await import('../js/models.js');
+  const { followLibrary, repairCourtsideRuns, planLiveSplit, applyLiveSplit } = await import('../js/sync.js');
+  const hist = await import('../js/history.js');
+
+  const ses = makeSession({ date: TODAY, gameDay: 'GD-6', status: 'complete', endedAt: new Date().toISOString(), label: 'Courtside day' });
+  await db.put(db.STORES.sessions, ses);
+
+  const cs = makeDrill({ name: 'Courtside 5on5', unrated: true, intensity: null });
+  await db.put(db.STORES.drills, cs);
+  const run = mkB({ sessionId: ses.id, ...drillSnapshot(cs), elapsedMs: 10 * 60000, endedAt: new Date().toISOString() });
+  await db.put(db.STORES.blocks, run);
+
+  ok('a never-set-up drill gives the run no category, not the default', run.category === null, String(run.category));
+  ok('and no matchup', run.contact === null && run.situation === null);
+  ok('and flags it as waiting', run.detailsPending === true);
+  ok('no invented intensity either', run.intensity === null);
+
+  let rows = hist.reportRowsFor([run], [cs]);
+  ok('the report says the drill is not set up, rather than guessing a category',
+    rows.rows.some((r) => r.label === hist.NOT_SET_UP));
+  ok('and keeps it out of the contact rows, counted as unclassified', rows.unclassified.runs === 1);
+
+  // He rates the run by hand on the practice screen first...
+  await db.put(db.STORES.blocks, { ...run, intensity: 7, unrated: false });
+  // ...then sets the drill up in the library.
+  const setUp = { ...cs, category: 'Defense', court: 3, situation: 1, contact: true, rhythm: 4, unrated: false };
+  await db.put(db.STORES.drills, setUp);
+  const moved = await followLibrary(setUp);
+  ok('setting the drill up reaches the run', moved === 1, String(moved));
+
+  const after = await db.get(db.STORES.blocks, run.id);
+  ok('the run is now filed under his category', after.category === 'Defense', String(after.category));
+  ok('with his matchup', after.contact === true && after.situation === 1);
+  ok('the rating he gave that day is kept', after.intensity === 7, String(after.intensity));
+  ok('and it stops waiting', after.detailsPending === false);
+
+  rows = hist.reportRowsFor([after], [setUp]);
+  ok('the report counts it as Defense', rows.rows.some((r) => r.label === 'Defense' && r.runs === 1));
+  ok('and as Contact 5on5', rows.rows.some((r) => r.key === 'band:contact5' && r.runs === 1));
+
+  // From here on it is an ordinary snapshot: re-filing the drill in March
+  // must not rewrite what this practice was.
+  const refiled = { ...setUp, category: 'Transition' };
+  await db.put(db.STORES.drills, refiled);
+  ok('a later re-file touches nothing', (await followLibrary(refiled)) === 0);
+  ok('the run keeps the category it was set up with',
+    (await db.get(db.STORES.blocks, run.id)).category === 'Defense');
+
+  /* ---- runs already on the tablet from before the fix ---- */
+  const born = new Date(Date.now() - 3600 * 1000).toISOString();
+  const oldCs = makeDrill({ name: 'Old courtside', unrated: false, category: 'Defense', situation: 1, contact: true, createdAt: born });
+  const oldRun = mkB({ sessionId: ses.id, drillId: oldCs.id, drillName: oldCs.name, category: 'Skill development',
+    intensity: 6, unrated: false, elapsedMs: 8 * 60000, createdAt: new Date(Date.parse(born) + 40).toISOString() });
+  delete oldRun.detailsPending;              // older records never had the field
+
+  // A drill that really was in the library, filed under Skill development at
+  // the time and re-filed since. Its run is a genuine snapshot.
+  const realDrill = makeDrill({ name: 'Form shooting', category: 'Shooting', createdAt: new Date(Date.now() - 10 * 86400000).toISOString() });
+  const realRun = mkB({ sessionId: ses.id, drillId: realDrill.id, drillName: realDrill.name, category: 'Skill development',
+    intensity: 3, elapsedMs: 5 * 60000 });
+  delete realRun.detailsPending;
+
+  await db.putMany(db.STORES.drills, [oldCs, realDrill]);
+  await db.putMany(db.STORES.blocks, [oldRun, realRun]);
+  const repaired = await repairCourtsideRuns();
+  ok('the start-up repair finds the old courtside run', repaired === 1, String(repaired));
+  const fixedOld = await db.get(db.STORES.blocks, oldRun.id);
+  ok('and files it where he set the drill up', fixedOld.category === 'Defense', String(fixedOld.category));
+  ok('keeping the intensity that run already had', fixedOld.intensity === 6);
+  ok('a genuine library snapshot is left alone',
+    (await db.get(db.STORES.blocks, realRun.id)).category === 'Skill development');
+  ok('the repair is idempotent', (await repairCourtsideRuns()) === 0);
+
+  /* ---- GD-6 ---- */
+  ok('GD-6 is an option, furthest out first', GAME_DAY_ORDER[0] === 'GD-6');
+  ok('and belongs in the game-week comparison', isGameWeekDay('GD-6'));
+
+  root = newRoot();
+  await practice.render(root);
+  await flush();
+  const csRow = root.querySelectorAll('.row').filter((r) => r.textContent.indexOf('Courtside day') !== -1)[0];
+  ok('recent sessions list the practice', !!csRow);
+  ok('with its game day on the row', csRow && csRow.textContent.indexOf('GD-6') !== -1);
+
+  /* ---- splitting Live / scrimmage ---- */
+  const smallLive = makeDrill({ name: '3 on 3 HC', category: 'Live / scrimmage', situation: 3, contact: true });
+  const bigLive = makeDrill({ name: '5 on 5 FC', category: 'Live / scrimmage', situation: 1, contact: true });
+  const shell = makeDrill({ name: '5 on 0 shell', category: 'Live / scrimmage', situation: 1, contact: false });
+  await db.putMany(db.STORES.drills, [smallLive, bigLive, shell]);
+  // A run whose OWN snapshot says 5v5, of a drill since changed to 3v3.
+  const oldLiveRun = mkB({ sessionId: ses.id, ...drillSnapshot(smallLive), situation: 1, elapsedMs: 20 * 60000 });
+  await db.put(db.STORES.blocks, oldLiveRun);
+
+  root = newRoot();
+  await settings.render(root);
+  await flush();
+  contains('settings offers the split while the old name is in use', root, 'can be split');
+
+  const plan = planLiveSplit(await db.getAll(db.STORES.drills), await db.getAll(db.STORES.blocks));
+  ok('contested small-sided goes to Small-sided live',
+    plan.drills.some((x) => x.id === smallLive.id && x.to === 'Small-sided live'));
+  ok('contested 5v5 goes to 5on5 live',
+    plan.drills.some((x) => x.id === bigLive.id && x.to === '5on5 live'));
+  ok('an unopposed drill is not guessed into a live category',
+    !plan.drills.some((x) => x.id === shell.id) && plan.leftDrills === 1);
+  ok('a past run is split by its own recorded matchup, not the library today',
+    plan.runs.some((x) => x.id === oldLiveRun.id && x.to === '5on5 live'));
+  await applyLiveSplit(plan);
+  ok('the split is written', (await db.get(db.STORES.drills, bigLive.id)).category === '5on5 live');
+}
+
+/* ---- the By drill search keeps the box he is typing in ----
+ * Every keystroke used to re-render the whole screen, which destroyed the
+ * input: the keyboard closed and the page jumped to the top. */
+{
+  root = newRoot();
+  await reports.render(root);
+  await flush();
+  const box = root.querySelectorAll('input').filter((i) =>
+    String(i.getAttribute('placeholder') || '').indexOf('Search drills') !== -1)[0];
+  ok('the drill search box is there', !!box);
+  if (box) {
+    box.dispatch('input', { target: { value: 'zzzz-no-such-drill' } });
+    await flush();
+    ok('typing does not replace the search box',
+      root.querySelectorAll('input').indexOf(box) !== -1);
+    contains('but the list under it does filter', root, 'No drill matches that.');
+  }
+  reports.teardown();
+}
+
 print(`\n${pass} passed, ${fail} failed`);
 if (fail) throw new Error(`${fail} test(s) failed`);

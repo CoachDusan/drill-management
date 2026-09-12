@@ -426,6 +426,8 @@ js/models.js          domain vocabulary: intensity scale, factories, dates
 js/load.js            the maths + the honesty about its limits
 js/history.js         aggregation across many practices: days, drills,
                       categories, game-day buckets, per-player series
+js/sync.js            runs that follow the library until their drill is set
+                      up; the start-up repair; splitting Live / scrimmage
 js/ui.js              DOM builder, modal, toast, file download/pick
 js/components.js      intensity picker/badge, status dot
 js/app.js             hash router and nav
@@ -741,6 +743,103 @@ live figure when nothing was timed.
   before building — a report he can hand to the head coach is a different
   feature from a report he reads on the tablet, and the second is what was
   asked for.
+
+## What the coach asked for after three weeks (2026-09-12)
+
+A long list. Agreed order, his choice: **(1) bugs and small items, (2) seasons
+and phases, (3) Reports game-day filter, (4) PDF reports.** Stage 1 is below;
+the rest is recorded so the decisions are not re-asked.
+
+### A courtside drill kept its guessed details forever — fixed at the source
+
+He typed a new 5on5 drill in during practice, set it up afterwards in Drills
+(Defense, 5v5 live), and the report still filed that practice's run under the
+old values. **Reproduced exactly for category:** every courtside path copied a
+brand-new drill's *defaults* into the run — `Skill development`, which he never
+chose — and a snapshot is never rewritten. The old late-rating backfill copied
+intensity, matchup and tags but not category, and only while the run was still
+`unrated`, so rating the run on the practice screen first shut it out entirely.
+
+**His "no D" tag did not reproduce.** That chip only shows for `contact ===
+false`, and no courtside path in any version wrote that. The fix covers it
+regardless; if he still sees it, it needs his real data.
+
+The fix is not "copy more fields later". It is: **a drill that has never been
+set up gives a run no details at all.** `drillSnapshot()` in `models.js` is now
+the only place a run copies a drill — there were five hand-written copies — and
+for an `unrated` drill it writes `null` category, matchup, tags and intensity
+plus `detailsPending: true`. Such a run follows the library (reports say
+"Drill not set up yet" and count it as matchup-unknown) until the drill is
+saved once; `followLibrary()` then fills it in and it becomes an ordinary
+snapshot. An intensity he set by hand on the run is kept — that was a decision
+about that day. Eighth place the null-not-a-guess rule appears.
+
+This also closed a quieter version of the same bug: starting a still-unrated
+drill from the library list snapshotted an invented 3.3 intensity.
+
+**Runs already on the tablet are repaired once at start-up**
+(`repairCourtsideRuns()`), recognised by what the old code wrote: the drill did
+not exist until a minute before the run (or was created by a swap after it),
+and the run carries the default category or none, with no movement tags. A
+drill genuinely picked from the library was there before the run, so a real
+snapshot cannot match — a test proves a re-filed library drill's old run is
+left alone. Idempotent; it marks every run it touches.
+
+Tests prove four deliberate breaks fail: copying defaults again, the repair
+dropping the "drill existed first" check, overwriting a hand rating, and the
+search box below.
+
+### Smaller items
+
+- **Reports "By drill" search jumped to the top on every letter.** Each
+  keystroke re-rendered the whole screen and destroyed the box being typed in,
+  closing the keyboard. It now repaints only the list; so does opening a drill.
+- **GD-6.** Added; GD-X now means more than six days out. GD-5 already existed.
+- **Game day on Recent sessions**, only when set — unset prints nothing rather
+  than a placeholder that reads like an answer.
+
+### "Live / scrimmage" split into four — his names
+
+20 of the 43 library drills sat in that one category. Offered two, three or
+four names; **he chose four**: `5on5 live`, `Small-sided live`,
+`Advantage games`, `Continuous games`.
+
+Only the first two can be worked out from recorded data (situation + contact),
+so Settings offers a one-tap split when anything still carries the old name.
+The library splits 10 / 10. The other two must be filed by hand, and the dialog
+says why: the grid stores 4v3 identically to 4v4, and has no concept of three
+teams rotating.
+
+**The split includes recorded runs, by each run's own snapshotted matchup.**
+This looks like it breaks "snapshots over references" and does not: nothing
+about what a practice was changes, only how finely it is named, and the answer
+comes from the run's own record rather than the library today. Without it,
+this season's reports would show the old category until the split date and
+the new ones after. Unopposed or matchup-unknown records stay under the old
+name and are counted, not guessed.
+
+### Decided, not yet built
+
+- **Seasons and phases.** A season picker (2026/2027) with Preseason /
+  Inseason / Offseason set as editable date ranges; reports show the chosen
+  season and phase only. It is a filter over one database, not a separate
+  database per season — nothing is lost when he switches. Unlike game day, the
+  phase *is* derived from the date: it is one boundary he sets once, not a
+  fact about each practice. His current season: preseason until 20.9.2026.
+- **Reports game-day filter.** A row GD-1 … GD-6 under Day / Week / Month /
+  Year / dates, combined with a from–till range, always showing how many
+  practices it stands on.
+- **PDF, built inside the app — his choice over Print → Save as PDF.** Offered
+  both with costs: print needs a "Background graphics" tick every time; in-app
+  means a PDF library carried in the app and every layout change is code. He
+  chose one tap and guaranteed colours. The library must be vendored into the
+  repo (no CDN — offline) and added to `sw.js`. Logo stored on the device.
+  Templates he specified: daily (by category); weekly (each practice or all
+  together, by category, by drill with count / min / max / average); monthly
+  (by week and whole month, by drill); yearly (by month); any dates.
+  **Drill order in every PDF: contested 5on5 first, then other contested, then
+  non-contact — within each, most-used first.** Contact first because that is
+  where live time is, and live time is what he reads.
 
 ## Hosting
 

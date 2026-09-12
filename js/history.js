@@ -247,9 +247,15 @@ export function sessionRollups(sessions, blocks, drills = []) {
   }).sort((a, b) => a.date.localeCompare(b.date));
 }
 
+/* A run of a drill that was added courtside and never set up has no category,
+ * and neither — honestly — does the drill: its stored category is only the
+ * default a new drill is born with. Say so instead of filing it under that. */
+export const NOT_SET_UP = 'Drill not set up yet';
+
 function categoryOfBlock(block, library) {
   if (block.category) return block.category;
   const d = block.drillId ? library.get(block.drillId) : null;
+  if (d && d.unrated) return NOT_SET_UP;
   return (d && d.category) ? d.category : 'Not in the library';
 }
 
@@ -499,6 +505,7 @@ function categoryOf(group, library) {
   const withCat = group.runs.filter((r) => r.block.category);
   if (withCat.length) return withCat[withCat.length - 1].block.category;
   const drill = group.drillId ? library.get(group.drillId) : null;
+  if (drill && drill.unrated) return NOT_SET_UP;
   return drill && drill.category ? drill.category : null;
 }
 
@@ -747,12 +754,16 @@ export function columnsFor(range, unit) {
 /** The matchup band for a run, falling back to the library for old runs. */
 export function blockMatchup(block, library) {
   if (block.contact === false) return 'unopposed';
-  let s = block.situation;
-  if (s === null || s === undefined) {
-    const d = block.drillId ? library.get(block.drillId) : null;
-    s = d ? d.situation : null;
+  const d = block.drillId ? library.get(block.drillId) : null;
+  // Never set up: whatever the library says now is the only answer there is,
+  // and a drill that is still unrated has no answer at all.
+  if (block.contact === null || block.detailsPending) {
+    if (!d || d.unrated) return 'unknown';
+    return matchupBand(d.situation, d.contact !== false);
   }
-  return matchupBand(s, block.contact !== false);
+  let s = block.situation;
+  if (s === null || s === undefined) s = d ? d.situation : null;
+  return matchupBand(s, true);
 }
 
 /**

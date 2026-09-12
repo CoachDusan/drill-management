@@ -11,7 +11,7 @@
 import * as db from '../db.js';
 import {
   makeSession, makeBlock, makeDrill, toDateKey, formatDate, intensityInfo,
-  resolveIntensity, TISSUE, DEFAULT_GROUPS, GAME_DAYS, gameDayInfo,
+  resolveIntensity, TISSUE, DEFAULT_GROUPS, GAME_DAYS, gameDayInfo, drillSnapshot,
 } from '../models.js';
 import {
   blockMinutes, blockLoad, sessionTeamLoad, sessionTeamMinutes,
@@ -150,6 +150,9 @@ function sessionRow(s, blocks, rated) {
     h('div', { class: 'grow' }, [
       h('div', { class: 'name' }, [
         `${formatDate(s.date)}${s.label ? ` · ${s.label}` : ''}`,
+        // Only when he set one. Unset stays blank rather than printing a
+        // placeholder that looks like an answer.
+        s.gameDay ? h('span', { class: 'chip on', style: { marginLeft: '8px' }, text: s.gameDay }) : null,
         rated ? h('span', { class: 'chip on', style: { marginLeft: '8px' }, text: 'rated' }) : null,
       ]),
       h('div', { class: 'tiny', text: `${s.type} · ${blocks.length} drill${blocks.length === 1 ? '' : 's'} · ${Math.round(mins)} min` }),
@@ -218,7 +221,7 @@ async function startPractice() {
     body.append(
       h('div', { class: 'form-row' }, [field('Date', date), field('Type', type)]),
       field('Where is this in the game week?', gameDay,
-        'GD-X is anything more than five days out. Leave it unset if you would rather say later — the analysis will tell you which practices are still missing it.'),
+        'GD-X is anything more than six days out. Leave it unset if you would rather say later — the analysis will tell you which practices are still missing it.'),
       field('Label', label),
       h('h3', { style: { marginTop: '18px' }, text: 'Who is training today?' }),
       h('p', { class: 'tiny', style: { marginTop: 0 } },
@@ -643,7 +646,7 @@ async function addBlock(session, drills, roster) {
           class: 'row clickable',
           onclick: () => done({ drill: d, group, mode: 'start' }),
         }, [
-          intensityBadge(resolveIntensity(d)),
+          d.unrated ? h('span', { class: 'chip', text: 'new' }) : intensityBadge(resolveIntensity(d)),
           h('div', { class: 'grow' }, [
             h('div', { class: 'name', text: d.name }),
             h('div', { class: 'tiny', text: d.category }),
@@ -683,11 +686,7 @@ async function addBlock(session, drills, roster) {
     await db.put(db.STORES.drills, drill);
     const blk = makeBlock({
       sessionId: session.id,
-      drillId: drill.id,
-      drillName: drill.name,
-      category: drill.category || null,
-      intensity: null,
-      unrated: true,
+      ...drillSnapshot(drill),   // no details yet — they follow the library
       group: result.group,
       startedAt: new Date().toISOString(),
       running: true,
@@ -703,13 +702,7 @@ async function addBlock(session, drills, roster) {
   const d = result.drill;
   const block = makeBlock({
     sessionId: session.id,
-    drillId: d.id,
-    drillName: d.name,
-    category: d.category || null,
-    intensity: resolveIntensity(d),
-    tissue: { ...(d.tissue || { jump: null, sprint: null, cod: null }) },
-    contact: d.contact !== false,
-    situation: d.situation === undefined ? null : d.situation,
+    ...drillSnapshot(d),
     group: result.group,
     startedAt: new Date().toISOString(),
     running: true,
@@ -744,13 +737,7 @@ async function manualBlock(session, drills, group, roster) {
 
   const block = makeBlock({
     sessionId: session.id,
-    drillId: result.drill.id,
-    drillName: result.drill.name,
-    category: result.drill.category || null,
-    intensity: resolveIntensity(result.drill),
-    tissue: { ...(result.drill.tissue || { jump: null, sprint: null, cod: null }) },
-    contact: result.drill.contact !== false,
-    situation: result.drill.situation === undefined ? null : result.drill.situation,
+    ...drillSnapshot(result.drill),
     group,
     startedAt: new Date().toISOString(),
     endedAt: new Date().toISOString(),
@@ -1047,15 +1034,7 @@ async function swapDrill(block, session, roster) {
     const drill = makeDrill({ name: picked.newName, unrated: true, intensity: null });
     await db.put(db.STORES.drills, drill);
     const fresh = await db.get(db.STORES.blocks, block.id);
-    await db.put(db.STORES.blocks, {
-      ...fresh,
-      drillId: drill.id,
-      drillName: drill.name,
-      category: drill.category || null,
-      intensity: null,
-      tissue: { jump: null, sprint: null, cod: null },
-      unrated: true,
-    });
+    await db.put(db.STORES.blocks, { ...fresh, ...drillSnapshot(drill) });
     toast(`Changed to ${drill.name} — rate it when you get a minute`);
     return render(rootEl);
   }
@@ -1063,17 +1042,7 @@ async function swapDrill(block, session, roster) {
   if (!picked.drill) return;
   const d = picked.drill;
   const fresh = await db.get(db.STORES.blocks, block.id);
-  await db.put(db.STORES.blocks, {
-    ...fresh,
-    drillId: d.id,
-    drillName: d.name,
-    category: d.category || null,
-    intensity: resolveIntensity(d),
-    tissue: { ...(d.tissue || { jump: null, sprint: null, cod: null }) },
-    contact: d.contact !== false,
-    situation: d.situation === undefined ? null : d.situation,
-    unrated: false,
-  });
+  await db.put(db.STORES.blocks, { ...fresh, ...drillSnapshot(d) });
   toast(`Changed to ${d.name}`);
   return render(rootEl);
 }
@@ -1256,7 +1225,7 @@ async function editGameDay(session) {
   const result = await openModal('Where is this in the game week?', (body, done) => {
     body.append(
       h('p', { class: 'tiny', style: { marginTop: 0 } },
-        'This is what groups practices together in the analysis — every GD-1 of the season compared against each other. GD-X means more than five days out, and is left out of those comparisons.'),
+        'This is what groups practices together in the analysis — every GD-1 of the season compared against each other. GD-X means more than six days out, and is left out of those comparisons.'),
       field('Game day', sel),
     );
     return () => done({ gameDay: sel.value || null });
@@ -1382,6 +1351,7 @@ async function openSessionSummary(session) {
               b.drillName,
               b.contact === false ? h('span', { class: 'chip', style: { marginLeft: '7px' }, text: 'no D' }) : null,
               b.unrated ? h('span', { class: 'chip', style: { marginLeft: '7px' }, text: 'unrated' }) : null,
+              b.detailsPending ? h('span', { class: 'chip', style: { marginLeft: '7px' }, text: 'set up in Drills' }) : null,
               // `.run-note`, not `.tiny`: it keeps the line breaks he typed.
               b.note ? h('div', { class: 'run-note', text: b.note }) : null,
             ]),

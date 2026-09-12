@@ -6,6 +6,7 @@
  */
 
 import * as db from '../db.js';
+import { followLibrary } from '../sync.js';
 import {
   makeDrill, DEFAULT_CATEGORIES, intensityInfo,
   INTENSITY_MODES, resolveIntensity, hasTissueTags, TISSUE, TISSUE_LEVELS,
@@ -287,45 +288,12 @@ export async function editDrill(existing, root) {
 
   await db.put(db.STORES.drills, result);
 
-  const filled = await backfillUnratedRuns(result);
+  // Runs of a drill added courtside were waiting on exactly this. See sync.js.
+  const filled = await followLibrary(result);
   toast(filled
     ? `Rated — ${filled} practice run${filled === 1 ? '' : 's'} now counted`
     : (existing ? 'Drill updated' : `“${result.name}” added`));
   await render(root);
-}
-
-/**
- * A drill added courtside is rated during or after that practice, and the
- * practice has to pick the number up — otherwise the session stays permanently
- * incomplete and the whole "rate it later" flow is a dead end.
- *
- * This does NOT contradict "snapshots over references". A snapshot exists to
- * stop a re-rating in March from rewriting what last November meant. A run that
- * was never rated has no meaning to protect — the field is blank, not different.
- * So only runs still flagged `unrated` are filled in. Any run that already
- * carries a number, including one the coach adjusted by hand for that day, is
- * left exactly as it is.
- */
-async function backfillUnratedRuns(drill) {
-  // Read all and filter in memory rather than adding a drillId index: an index
-  // means a schema version bump, and the tablet is already carrying a season's
-  // real data. A few hundred blocks is nothing to scan.
-  const blocks = await db.getAll(db.STORES.blocks);
-  const pending = blocks.filter((b) => b.unrated && b.drillId === drill.id);
-  if (!pending.length) return 0;
-
-  const intensity = resolveIntensity(drill);
-  for (const b of pending) {
-    await db.put(db.STORES.blocks, {
-      ...b,
-      intensity,
-      tissue: { ...(drill.tissue || { jump: null, sprint: null, cod: null }) },
-      contact: drill.contact !== false,
-      situation: drill.situation === undefined ? null : drill.situation,
-      unrated: false,
-    });
-  }
-  return pending.length;
 }
 
 export async function archiveDrill(drill, root) {

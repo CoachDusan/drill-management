@@ -6,6 +6,7 @@
 
 import * as db from './db.js';
 import { h, mount, toast } from './ui.js';
+import { repairCourtsideRuns } from './sync.js';
 
 const ROUTES = [
   { id: 'practice', label: 'Practice', icon: '⏱', module: () => import('./views/practice.js') },
@@ -104,6 +105,11 @@ async function boot() {
   await db.getMeta('installedAt').then(async (v) => {
     if (!v) await db.setMeta('installedAt', new Date().toISOString());
   });
+
+  // Runs recorded courtside before 2026-09-12 carry a guessed category. This
+  // finds them and lets them follow the library; it is idempotent, and it must
+  // never stop the app from opening.
+  try { await repairCourtsideRuns(); } catch (err) { console.error('Courtside repair skipped:', err); }
 
   await navigate();
 }

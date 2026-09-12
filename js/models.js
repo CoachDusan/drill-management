@@ -167,7 +167,7 @@ export const MATCHUP_BANDS = [
   { key: 'contact5',     label: 'Contact 5on5',        note: 'Contested, whole squad on the floor' },
   { key: 'contactSmall', label: 'Contact 1on1/2on2…',  note: 'Contested, small-sided' },
   { key: 'unopposed',    label: 'No defence',          note: 'Pattern work, shooting, walk-through' },
-  { key: 'unknown',      label: 'Matchup not recorded',note: 'Run predates the matchup snapshot and its drill is gone' },
+  { key: 'unknown',      label: 'Matchup not recorded',note: 'Drill not set up yet, or an old run whose drill is gone' },
 ];
 
 export function matchupBand(situation, contact) {
@@ -382,11 +382,14 @@ export const GAME_DAYS = [
   { value: 'GD-3', label: 'GD-3', note: 'Three days out' },
   { value: 'GD-4', label: 'GD-4', note: 'Four days out' },
   { value: 'GD-5', label: 'GD-5', note: 'Five days out' },
-  { value: 'GD-X', label: 'GD-X', note: 'More than five days out — no game-week analysis' },
+  { value: 'GD-6', label: 'GD-6', note: 'Six days out' },
+  { value: 'GD-X', label: 'GD-X', note: 'More than six days out — no game-week analysis' },
 ];
 
-/** The order he reads a week in: furthest out first, game day last. */
-export const GAME_DAY_ORDER = ['GD-5', 'GD-4', 'GD-3', 'GD-2', 'GD-1', 'GD'];
+/** The order he reads a week in: furthest out first, game day last.
+ *  GD-6 was added at his request (2026-09-12): a week with a game on each
+ *  weekend has a practice six days out, and it belongs in the comparison. */
+export const GAME_DAY_ORDER = ['GD-6', 'GD-5', 'GD-4', 'GD-3', 'GD-2', 'GD-1', 'GD'];
 
 /** Does this label belong in the game-week comparisons? GD-X and unset do not. */
 export function isGameWeekDay(value) {
@@ -406,11 +409,44 @@ export const DEFAULT_CATEGORIES = [
   'Offense',
   'Defense',
   'Transition',
-  'Live / scrimmage',
+  '5on5 live',
+  'Small-sided live',
+  'Advantage games',
+  'Continuous games',
   'Conditioning',
   'Strength / power',
   'Cool-down / recovery',
 ];
+
+/* ---- splitting "Live / scrimmage" -----------------------------------
+ *
+ * Twenty of the 43 imported drills sat under one category, which made it
+ * useless for planning: a 1on1 half court and a full-court scrimmage are
+ * different work. The coach asked for the split and chose four names.
+ *
+ * Two of the four can be worked out from what every drill already records —
+ * the matchup (situation + contact) — so existing drills and runs can be
+ * re-filed in one tap. The other two cannot, and that must be said rather than
+ * guessed: the grid stores 4v3 as "4v4 with defence", and has no way to say
+ * three teams are rotating. Those are filed by hand.
+ */
+export const LEGACY_LIVE_CATEGORY = 'Live / scrimmage';
+
+export const LIVE_CATEGORIES = [
+  { name: '5on5 live',        note: 'Whole squad on the floor, contested', derivable: true },
+  { name: 'Small-sided live', note: '1on1 to 4on4, contested',             derivable: true },
+  { name: 'Advantage games',  note: '4on3, 3on2, 5on4 — uneven on purpose. Set by hand.', derivable: false },
+  { name: 'Continuous games', note: '4on4on4, 5on5on5 — three teams rotating. Set by hand.', derivable: false },
+];
+
+/** Where a contested run lands in the split, from its matchup alone. Returns
+ *  null for anything the matchup cannot place (unopposed, or not recorded). */
+export function liveCategoryFor(situation, contact) {
+  if (contact !== true) return null;
+  const s = Number(situation);
+  if (!Number.isFinite(s) || s < 1 || s > 5) return null;
+  return s === 1 ? '5on5 live' : 'Small-sided live';
+}
 
 /* ---- participation --------------------------------------------------
  *
@@ -469,7 +505,7 @@ export function makeSession(fields = {}) {
     date: toDateKey(now),
     label: '',
     type: 'Practice',        // Practice | Game | Lift | Recovery | Other
-    gameDay: null,           // 'GD' | 'GD-1'..'GD-5' | 'GD-X' | null (not said)
+    gameDay: null,           // 'GD' | 'GD-1'..'GD-6' | 'GD-X' | null (not said)
     status: 'live',          // live | complete
     startedAt: now.toISOString(),
     endedAt: null,
@@ -493,7 +529,8 @@ export function makeBlock(fields = {}) {
                              // existed, which fall back to the library.
     intensity: 5,            // snapshot, adjustable in the moment
     tissue: { jump: null, sprint: null, cod: null }, // snapshot too
-    contact: true,           // snapshot: was this contested?
+    contact: true,           // snapshot: was this contested? null while the
+                             // drill has never been set up (detailsPending)
     situation: null,         // snapshot: how many were sharing the floor (1-5).
                              // Null on runs recorded before the reports needed
                              // it, which fall back to the library exactly as
@@ -511,9 +548,55 @@ export function makeBlock(fields = {}) {
     running: false,
     lastResumedAt: null,
     participation: {},       // playerId -> 1 | 0.5 | 0 ; absent means full
+    detailsPending: false,   // true while the drill behind this run has never
+                             // been set up; the run follows the library until
+                             // it is. Absent on older runs. See drillSnapshot.
     note: '',
     createdAt: new Date().toISOString(),
     ...fields,
+  };
+}
+
+/* What a drill run copies out of the library when it starts.
+ *
+ * ONE function, used by every way a run can begin — picked from the list,
+ * typed in courtside, logged afterwards, swapped. There used to be five copies
+ * of this, and the courtside ones copied a brand-new drill's DEFAULTS as if
+ * they were answers: category "Skill development", which nobody chose. The
+ * coach then set the drill up properly in the library and the report still
+ * filed it under the guess, because a snapshot is never rewritten.
+ *
+ * A drill that has never been set up (`unrated`) therefore gives a run no
+ * details at all — null, not a default — and flags it `detailsPending`. The
+ * run follows the library until the drill is saved once (see js/sync.js), and
+ * from then on it is an ordinary snapshot. Same rule as an untimed clock and an
+ * unrated drill: not said is not the same as a value. */
+export function drillSnapshot(drill) {
+  const noTissue = { jump: null, sprint: null, cod: null };
+  if (!drill) return {};
+  if (drill.unrated) {
+    return {
+      drillId: drill.id,
+      drillName: drill.name,
+      category: null,
+      intensity: null,
+      tissue: noTissue,
+      contact: null,
+      situation: null,
+      unrated: true,
+      detailsPending: true,
+    };
+  }
+  return {
+    drillId: drill.id,
+    drillName: drill.name,
+    category: drill.category || null,
+    intensity: resolveIntensity(drill),
+    tissue: { ...(drill.tissue || noTissue) },
+    contact: drill.contact !== false,
+    situation: drill.situation === undefined ? null : drill.situation,
+    unrated: false,
+    detailsPending: false,
   };
 }
 

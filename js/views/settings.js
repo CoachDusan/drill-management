@@ -7,7 +7,8 @@
 
 import * as db from '../db.js';
 import { h, mount, toast, confirmDanger, downloadFile, pickFile, toCSV, openModal, field, textInput } from '../ui.js';
-import { toDateKey, resolveIntensity, DEFAULT_GROUPS } from '../models.js';
+import { toDateKey, resolveIntensity, DEFAULT_GROUPS, LIVE_CATEGORIES, LEGACY_LIVE_CATEGORY } from '../models.js';
+import { planLiveSplit, applyLiveSplit } from '../sync.js';
 
 export async function render(root) {
   const [players, drills, sessions, blocks] = await Promise.all([
@@ -20,6 +21,8 @@ export async function render(root) {
   const askLiveTime = await db.getMeta('askLiveTime', true);
   const customTags = await db.getMeta('customTags', []);
   const customCategories = await db.getMeta('customCategories', []);
+  const liveSplit = planLiveSplit(await db.getAll(db.STORES.drills), await db.getAll(db.STORES.blocks));
+  const liveSplitWaiting = liveSplit.drills.length + liveSplit.runs.length;
   const groups = await db.getMeta('groups', DEFAULT_GROUPS);
   const lastBackup = await db.getMeta('lastBackupAt', null);
   const daysSince = lastBackup
@@ -145,6 +148,15 @@ export async function render(root) {
           customCategories.map((c) => removableChip(c, () => removeCustom('customCategories', c, root))))
         : h('p', { class: 'tiny', style: { marginTop: 0 } },
           'None yet. Add one from the “+ New category” option in the drill editor.'),
+
+      /* Offered only while something is still filed under the old name. */
+      liveSplitWaiting ? h('div', { class: 'note', style: { marginTop: '14px' } }, [
+        h('strong', { text: `“${LEGACY_LIVE_CATEGORY}” can be split. ` }),
+        `${liveSplit.drills.length} drill${liveSplit.drills.length === 1 ? '' : 's'} and ${liveSplit.runs.length} recorded run${liveSplit.runs.length === 1 ? '' : 's'} can be re-filed from the matchup they already carry.`,
+        h('div', { class: 'btn-row', style: { marginTop: '8px' } }, [
+          h('button', { class: 'btn btn-sm btn-primary', onclick: () => splitLive(liveSplit, root) }, 'Split it…'),
+        ]),
+      ]) : null,
     ]),
 
     /* ---- what this measures ---- */
@@ -185,6 +197,34 @@ function removableChip(label, onRemove) {
       onclick: onRemove,
     }, '\u00d7'),
   ]);
+}
+
+/* The coach's four names, two of which the matchup can place. The dialog says
+ * which is which, and says that past practices are re-filed too — by their own
+ * recorded matchup, so what each practice was does not change, only how finely
+ * it is named. */
+async function splitLive(plan, root) {
+  const lines = LIVE_CATEGORIES.map((c) => h('li', {}, [
+    h('strong', { text: c.name }),
+    ` — ${c.note}`,
+    c.derivable ? ` · ${plan.counts[c.name] || 0} drill${(plan.counts[c.name] || 0) === 1 ? '' : 's'}` : '',
+  ]));
+  const ok = await openModal(`Split “${LEGACY_LIVE_CATEGORY}”`, (body, done) => {
+    body.append(
+      h('ul', { style: { paddingLeft: '18px' } }, lines),
+      h('p', { class: 'small' },
+        `${plan.drills.length} drill${plan.drills.length === 1 ? '' : 's'} in the library and ${plan.runs.length} run${plan.runs.length === 1 ? '' : 's'} in practices you already recorded will move, using the matchup each one stored. Past practices are included, so this season's reports use the new names from the first day.`),
+      h('p', { class: 'small' },
+        'Advantage games and Continuous games cannot be worked out — the matchup records a 4on3 the same as a 4on4, and has no way to say three teams rotate. Move those drills by hand in Drills.'),
+      (plan.leftDrills || plan.leftRuns) ? h('div', { class: 'note warn' },
+        `${plan.leftDrills} drill${plan.leftDrills === 1 ? '' : 's'} and ${plan.leftRuns} run${plan.leftRuns === 1 ? '' : 's'} stay under “${LEGACY_LIVE_CATEGORY}”: they have no defence, or no matchup recorded, so they cannot be placed without guessing.`) : null,
+    );
+    return () => done(true);
+  }, { confirmLabel: 'Split it' });
+  if (!ok) return;
+  await applyLiveSplit(plan);
+  toast(`Split — ${plan.drills.length} drills and ${plan.runs.length} runs re-filed`);
+  await render(root);
 }
 
 async function removeCustom(key, value, root) {

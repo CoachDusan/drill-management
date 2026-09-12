@@ -298,8 +298,10 @@ export function renumber(blocks) {
  * "his load is up 20%", and often the more useful one.
  */
 
+/* null contact means the drill has never been set up — not known, so it is
+ * not counted as contact. The run is flagged and named on screen instead. */
 export function blockContactMinutes(block) {
-  return block.contact === false ? 0 : blockMinutes(block);
+  return block.contact === false || block.contact === null ? 0 : blockMinutes(block);
 }
 
 export function sessionContactByPlayer(blocks, playerIds) {

@@ -77,7 +77,14 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      // Only this app's own old caches. Cache storage belongs to the whole
+      // origin, not to a folder, so on any device where another of these apps
+      // is opened in the same browser, "delete everything that isn't mine"
+      // throws away that app's offline copy and leaves it unable to open
+      // without a connection. Data was never at risk; offline copies were.
+      .then((keys) => Promise.all(
+        keys.filter((k) => k.startsWith('load-tracker-') && k !== CACHE).map((k) => caches.delete(k))
+      ))
       .then(() => self.clients.claim())
   );
 });

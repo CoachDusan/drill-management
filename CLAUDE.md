@@ -1012,13 +1012,13 @@ The app ships with no drills. The library is club data and must be carried to
 the tablet by hand (`private/drill-library.json`, Settings -> Import a drill
 library). An empty Drill library on a fresh device is correct, not a bug.
 
-**Pushing from this Mac does not work.** `~/.gitconfig` had a credential helper
-pointing at a `gh` binary in a since-deleted temp folder, which also blanked the
-Keychain fallback — it broke every repo on the machine, not just this one. The
-stale entries were removed (backup: `~/.gitconfig.backup-20260818`), but the
-Keychain holds no GitHub credential, so command-line pushes still fail. Dusan
-pushes via GitHub Desktop or VS Code. Commit locally and ask; do not burn time
-retrying the push.
+**Pushing from this Mac works again** — confirmed 2026-09-18 by pushing from
+the command line. `~/.gitconfig` once had a credential helper pointing at a
+`gh` binary in a since-deleted temp folder, which blanked the Keychain fallback
+and broke every repo on the machine. The stale entries were removed (backup:
+`~/.gitconfig.backup-20260818`) and a GitHub credential has since been stored,
+so `git push origin main` succeeds. GitHub Desktop and VS Code stay as
+fallbacks if it ever breaks again.
 
 ## Build stages
 

@@ -87,7 +87,10 @@ when they are not happening.
 
 **Snapshots over references.** A recorded drill run stores its own copy of the
 drill name and intensity. Re-rating a drill in the library must never silently
-rewrite what last November's practices meant.
+rewrite what last November's practices meant. The name and the category are
+the one part he can now move deliberately — the app asks when he renames, it
+never decides for him, and the intensity and matchup are never touched. See
+2026-09-20 below.
 
 **Intensity comes from an objective grid, not a gut feeling.** Adopted from
 the coach's own framework (see the two source images discussed 2026-08-18).
@@ -969,6 +972,126 @@ and that caught four layout faults no assertion would have: tables leaving
 pages holding three rows, cramped week headers, a tile note printing two
 unrelated percentages side by side, and one group of drills named two ways.
 It cannot show how the file opens on the tablet.
+
+## What the coach asked for after four weeks (2026-09-20)
+
+Fourth round. Two of the six items were the same fault seen from two sides —
+the app had no way to change a label *after the fact* — and one was a real
+hole in what "contact" means.
+
+### The season ends when the offseason starts, and he never tracks it
+
+"I don't know when the season exactly ends (depends on success and results) —
+so make sure I can change the data later."
+
+So the season editor asks for three dates, not four: preseason, inseason, and
+**Season ends (last day)**, blank until he knows. Offseason is gone as an
+input; a season that already carried one keeps meaning what it meant, because
+the editor folds it into the end date (the day before the offseason started).
+The Offseason phase button on Reports only appears if some season still has
+one. Everything was already editable — `Edit dates` on the Practice screen —
+and the field note now says so out loud, since that was the thing he needed to
+be sure of before entering anything.
+
+### Contact comes from the CATEGORY now, not from the grid
+
+He found the hole: his **6on6 warm-up** was counted as whole-squad contact. The
+matchup dial stops at five a side, so he entered it as 5v5 with live defence —
+correctly, there is nothing else to pick — and the old rule ("live defence
+plus how many players") had no way to know it was a warm-up.
+
+His own definition, and it is a category rule, not a grid rule:
+
+| Category | Contact row |
+|---|---|
+| 5on5 live, and 5on5on5 from Continuous games | Contact 5on5 |
+| Small-sided live, and 4on4on4 from Continuous games | Small sided contact |
+| Defense — "only those with the contact" | Shell drill w/contact |
+| Transition / advantage | Transition w/contact |
+
+Four rows instead of two, in his words, and **Whole contact** is the four
+added. Continuous games splits by how many are a side, which is the one place
+the grid is still consulted. A drill counts only if it is ALSO set to live
+defence — that is what separates the Defense drills with live play inside from
+the walk-throughs — and a drill in a contact category with no live defence is
+**reported, not silently dropped** (`noDefence` on `reportRowsFor`). Ninth
+place the null-is-not-zero rule appears.
+
+The mapping is in Settings, because the categories are his and he renames
+them; the code only guesses the first time, from the name
+(`defaultContactRow` in models.js). A run whose drill was never set up has no
+category, so it is `unknown` and reported as before — never quietly "not
+contact", which would shrink the totals.
+
+The 6on6 needs nothing else: filed as a warm-up, it is out of every contact
+figure while still counting in load and court time. The matchup picker says so
+when 5v5 is selected, so the next person to enter a 6v6 is not left guessing.
+
+### Renaming: the app asks, once, and can be asked again later
+
+"I changed the name / the category of the drill and the report still shows the
+old one." True, and deliberate — a run snapshots its name and category so that
+re-filing a drill in March cannot rewrite what November's practices were made
+of. But correcting a name is not the same thing as deciding a drill is now
+something else, and **only he knows which one it is**.
+
+Offered automatic-follow versus asking; he chose **asking**. So:
+
+- Saving a name or category change in the library asks once, with the count of
+  affected practices and both consequences spelled out.
+- Settings carries a **catch-up card** for the renaming he had already done by
+  hand, listing each drill and what its runs still say. Nothing moves without
+  a tap.
+- Only the name and the category ever move. Intensity, matchup and movement
+  tags stay as recorded — they are what the load was worked out from, and a
+  test breaks if anything else is written.
+
+### Categories: one rename instead of twenty
+
+"You gave me the ideas and we agreed on changes… but the changes are not
+visible" — the new live-category names were only offered drill by drill, and
+the one-tap split sat in Settings where he never went. Settings now lists
+every category in use with how much is filed under it, and renaming one moves
+every drill (and, if he ticks it, every recorded run) at once. Renaming onto a
+name already in use **merges** the two.
+
+His questions, answered:
+- **3on3on3 and 4on4on4 continuous are `Continuous games`**, not small-sided.
+  Three teams rotating is a different drill from a 3on3: one team is always
+  resting, and the ball goes end to end. That is what the category is for.
+- **Advantage games was merged into Transition**, at his request — one
+  category named `Advantage games (transition)`. All his advantage work (3on2,
+  2on1, 5on4+1) was already filed under Transition, so a separate category
+  would only have asked him to decide the same thing twice.
+
+### Reports
+
+- **He names the report.** A week in a team sport runs from one game to the
+  next, not Monday to Sunday, so his weekly report is often "chosen dates" —
+  and it should say *Weekly report* at the top. The title is editable in the
+  PDF dialog, goes in the header, on every page and in the file name, and the
+  last one he used for that kind of report is offered again (`pdfTitles`).
+- **Tiles: Practices, Court time, Live time, Contact, 5on5 live.** A
+  one-practice day drops the practice count — "I know it is only 1" — and
+  contact takes its place. Contact is every contact row added; 5on5 live is
+  the whole-squad row under the name he calls it.
+- **By drill: average and live % come first and are printed bold on a tint.**
+  They were last, after the total and the spread. The spread stays, to their
+  right, because a drill that runs 25 minutes before one game and 10 before
+  the next is being used two ways.
+- **The daily sheet lost its `#` and Group columns** and prints live time in
+  bold. The rows are already in the order they ran; the group is a courtside
+  fact.
+
+### Verified
+
+`tests/history.test.js` pins every rule above, including the 6on6 warm-up
+itself. Three deliberate breaks were checked to fail before the green run was
+trusted: contact worked out from the grid again (the warm-up returns to the
+5on5 total), a relabel that also rewrites the intensity, and the daily report
+keeping its practice-count tile. Sample PDFs were rendered and read page by
+page — that is what caught the Contact tile's note running off the edge once
+there were five tiles across the page.
 
 ## Hosting
 

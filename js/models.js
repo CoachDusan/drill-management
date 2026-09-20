@@ -163,6 +163,75 @@ export function situationOption(situation, contact) {
  * that quietly leaves such runs out is a contact total he would trust and
  * should not. Same rule as an untimed clock and an unrated drill.
  */
+/* ---- which drills count as contact ------------------------------------
+ *
+ * The first version of this worked contact out from the grid alone: anything
+ * with live defence was contact, and the number of players said whether it was
+ * 5on5 or small-sided. The coach found the hole in it (2026-09-20): his 6on6
+ * warm-up is entered as 5v5 with live defence, because there is no 6v6 on the
+ * matchup dial, and it was being counted as whole-squad contact. It is a
+ * warm-up. Nobody is competing in it.
+ *
+ * So contact now comes from the CATEGORY — his own vocabulary, the thing that
+ * says what a drill is FOR — with the grid used only where he asked for it:
+ *
+ *   5on5 live                  -> Contact 5on5
+ *   Continuous games           -> by how many a side: 5on5on5 is whole-squad
+ *                                 contact, 4on4on4 is small-sided
+ *   Small-sided live           -> Small sided contact
+ *   Defense                    -> Shell drill w/contact, but ONLY the drills
+ *                                 with live play inside. "Not all of them but
+ *                                 some of them" — his words, and the live
+ *                                 defence flag is what separates them.
+ *   Transition / Advantage     -> Transition w/contact
+ *
+ * Everything else — warm-ups, shooting, 5v0 pattern work, conditioning — is
+ * not contact, whatever the matchup says. The 6on6 warm-up drops out the
+ * moment it is filed as a warm-up, with nothing new to enter.
+ *
+ * The mapping is editable in Settings, because the categories are his and he
+ * renames them. These are only the defaults, matched on the name.
+ */
+export const CONTACT_ROWS = [
+  { key: 'contact5',     label: 'Contact 5on5',          note: 'Whole squad contested — 5on5 live, and 5on5on5' },
+  { key: 'contactSmall', label: 'Small sided contact',   note: 'Contested with fewer players — 1on1 to 4on4, and 4on4on4' },
+  { key: 'shell',        label: 'Shell drill w/contact', note: 'Defence drills with live play inside' },
+  { key: 'transition',   label: 'Transition w/contact',  note: 'Transition and advantage games' },
+];
+
+/** A category whose drills split between the two contact sizes by how many
+ *  players are a side. Continuous games holds both 5on5on5 and 4on4on4. */
+export const BY_SIZE = 'bySize';
+
+export function contactRowInfo(key) {
+  return CONTACT_ROWS.find((r) => r.key === key) || null;
+}
+
+function normCategory(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/** The contact row a category falls in by default, before he changes it in
+ *  Settings. Null means the category is not contact at all. */
+export function defaultContactRow(category) {
+  const n = normCategory(category);
+  if (!n) return null;
+  if (/5on5live|5v5live|livescrimmage5on5/.test(n)) return 'contact5';
+  if (/continuous/.test(n)) return BY_SIZE;
+  if (/smallside/.test(n)) return 'contactSmall';
+  if (/^livescrimmage$/.test(n)) return BY_SIZE;      // the old single category
+  if (/^defen[cs]e/.test(n)) return 'shell';
+  if (/transition|advantage/.test(n)) return 'transition';
+  return null;
+}
+
+/** What Settings holds: category -> row key, BY_SIZE, or null for "not
+ *  contact". A category he has never touched falls back to the default. */
+export function contactRowForCategory(category, map = null) {
+  if (map && Object.prototype.hasOwnProperty.call(map, category)) return map[category] || null;
+  return defaultContactRow(category);
+}
+
 export const MATCHUP_BANDS = [
   { key: 'contact5',     label: 'Contact 5on5',        note: 'Contested, whole squad on the floor' },
   { key: 'contactSmall', label: 'Contact 1on1/2on2…',  note: 'Contested, small-sided' },
@@ -408,10 +477,13 @@ export const DEFAULT_CATEGORIES = [
   'Shooting',
   'Offense',
   'Defense',
-  'Transition',
+  // One category, not two. "Advantage games are most probably Transition?" —
+  // yes: his 3on2, 2on1 and 5on4+1 are all already filed under Transition, so
+  // a separate Advantage games category would only ask him to decide the same
+  // thing twice. The name carries both words instead (his call, 2026-09-20).
+  'Advantage games (transition)',
   '5on5 live',
   'Small-sided live',
-  'Advantage games',
   'Continuous games',
   'Conditioning',
   'Strength / power',
@@ -435,7 +507,6 @@ export const LEGACY_LIVE_CATEGORY = 'Live / scrimmage';
 export const LIVE_CATEGORIES = [
   { name: '5on5 live',        note: 'Whole squad on the floor, contested', derivable: true },
   { name: 'Small-sided live', note: '1on1 to 4on4, contested',             derivable: true },
-  { name: 'Advantage games',  note: '4on3, 3on2, 5on4 — uneven on purpose. Set by hand.', derivable: false },
   { name: 'Continuous games', note: '4on4on4, 5on5on5 — three teams rotating. Set by hand.', derivable: false },
 ];
 

@@ -19,7 +19,8 @@
 
 import {
   TISSUE, toDateKey, addDays, fromDateKey, formatDate,
-  GAME_DAY_ORDER, isGameWeekDay, matchupBand, matchupInfo, CONTACT_BANDS,
+  GAME_DAY_ORDER, isGameWeekDay, matchupBand,
+  CONTACT_ROWS, BY_SIZE, contactRowForCategory,
 } from './models.js';
 import {
   blockMinutes, blockLoad, blockTissue, blockContactMinutes,
@@ -816,13 +817,53 @@ export function blockMatchup(block, library) {
   return matchupBand(s, true);
 }
 
+/* ---- the contact rows ---------------------------------------------------
+ *
+ * His four rows, and they come from the CATEGORY now, not from the grid. See
+ * the long note in models.js: a 6on6 warm-up entered as 5v5 with live defence
+ * was landing in whole-squad contact, and it is a warm-up.
+ *
+ * Three answers besides the four rows, and each of them is reported rather
+ * than folded into a total:
+ *   null         not a contact category at all — warm-ups, shooting, 5v0.
+ *   'noDefence'  in a contact category, but recorded with no live defence.
+ *   'unknown'    the run cannot be placed: a drill added courtside and never
+ *                set up, or an old run whose drill has been deleted.
+ */
+export function contactRowOf(block, library, map = null) {
+  const category = categoryOfBlock(block, library);
+  // A run whose drill was never set up has no category of its own, so it
+  // cannot be placed. Saying "not contact" would quietly shrink the totals.
+  if (category === NOT_SET_UP || category === 'Not in the library') return 'unknown';
+
+  const assign = contactRowForCategory(category, map);
+  if (!assign) return null;
+
+  const d = block.drillId ? library.get(block.drillId) : null;
+  let contact = block.contact;
+  if (contact === null || contact === undefined || block.detailsPending) {
+    contact = (d && !d.unrated) ? d.contact !== false : null;
+  }
+  if (contact === null) return 'unknown';
+  // "Not all Defense drills — only those with the contact." The same test is
+  // applied to every contact category: unopposed work is never contact.
+  if (contact === false) return 'noDefence';
+
+  if (assign !== BY_SIZE) return assign;
+  let s = block.situation;
+  if (s === null || s === undefined) s = d ? d.situation : null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 1 || n > 5) return 'unknown';
+  return n === 1 ? 'contact5' : 'contactSmall';
+}
+
 /**
  * Every row of his weekly table, in his order, built from one pass over the
  * runs. Categories are his own vocabulary; the contact rows come out of the
  * grid; "Whole contact" is the two contact rows added, not a third bucket the
  * runs are sorted into — a drill belongs to exactly one of them.
  */
-export function reportRowsFor(blocks, drills = [], { categories = null } = {}) {
+export function reportRowsFor(blocks, drills = [], { categories = null, contactRows = null } = {}) {
   const library = new Map(drills.map((d) => [d.id, d]));
   const byCategory = new Map();
   const byBand = new Map();
@@ -832,9 +873,11 @@ export function reportRowsFor(blocks, drills = [], { categories = null } = {}) {
     if (!byCategory.has(cat)) byCategory.set(cat, []);
     byCategory.get(cat).push(b);
 
-    const band = blockMatchup(b, library);
-    if (!byBand.has(band)) byBand.set(band, []);
-    byBand.get(band).push(b);
+    const band = contactRowOf(b, library, contactRows);
+    if (band) {
+      if (!byBand.has(band)) byBand.set(band, []);
+      byBand.get(band).push(b);
+    }
   }
 
   const catKeys = categories
@@ -847,26 +890,31 @@ export function reportRowsFor(blocks, drills = [], { categories = null } = {}) {
     ...aggregate(byCategory.get(c)),
   }));
 
-  for (const band of CONTACT_BANDS) {
-    const list = byBand.get(band) || [];
+  for (const row of CONTACT_ROWS) {
+    const list = byBand.get(row.key) || [];
     rows.push({
-      key: `band:${band}`, kind: 'matchup', label: matchupInfo(band).label, blocks: list,
+      key: `band:${row.key}`, kind: 'matchup', label: row.label, blocks: list,
       ...aggregate(list),
     });
   }
 
-  const whole = CONTACT_BANDS.flatMap((b) => byBand.get(b) || []);
+  const whole = CONTACT_ROWS.flatMap((r) => byBand.get(r.key) || []);
   rows.push({
     key: 'band:whole', kind: 'matchup', label: 'Whole contact', emphasis: true, blocks: whole,
     ...aggregate(whole),
   });
 
   const unknown = byBand.get('unknown') || [];
+  const noDefence = byBand.get('noDefence') || [];
   return {
     rows,
     // Never silently folded into a contact total. Reported so he knows the
     // contact rows are short, rather than believing them.
     unclassified: { runs: unknown.length, ...aggregate(unknown) },
+    // A drill filed in a contact category but recorded with no live defence.
+    // He said "all Transition drills are contact"; if one of them is set to
+    // no defence it is left out, and that is worth saying rather than hiding.
+    noDefence: { runs: noDefence.length, ...aggregate(noDefence) },
   };
 }
 
@@ -876,7 +924,7 @@ export function reportRowsFor(blocks, drills = [], { categories = null } = {}) {
  * Each cell is a full aggregate, so the screen can print "25 min full, 15 min
  * live" and still know how much of that cell was actually timed.
  */
-export function reportTable(sessions, blocks, drills, range, unit, { categories = null } = {}) {
+export function reportTable(sessions, blocks, drills, range, unit, { categories = null, contactRows = null } = {}) {
   const dateOf = new Map(sessions.map((s) => [s.id, s.date]));
   const gameDayOf = new Map(sessions.map((s) => [s.id, s.gameDay || null]));
   const inRange = blocks.filter((b) => {
@@ -884,7 +932,7 @@ export function reportTable(sessions, blocks, drills, range, unit, { categories 
     return d && d >= range.from && d <= range.to;
   });
 
-  const overall = reportRowsFor(inRange, drills, { categories });
+  const overall = reportRowsFor(inRange, drills, { categories, contactRows });
   const rowOrder = overall.rows.map((r) => r.key);
 
   let columns = columnsFor(range, unit);
@@ -901,7 +949,7 @@ export function reportTable(sessions, blocks, drills, range, unit, { categories 
       const d = dateOf.get(b.sessionId);
       return d >= c.from && d <= c.to;
     });
-    const built = reportRowsFor(cellBlocks, drills, { categories });
+    const built = reportRowsFor(cellBlocks, drills, { categories, contactRows });
     const byKey = new Map(built.rows.map((r) => [r.key, r]));
     // The game-week labels of the sessions in this column. A day usually has
     // one; a week has several, and the header lists them in order.
@@ -918,7 +966,8 @@ export function reportTable(sessions, blocks, drills, range, unit, { categories 
     };
   });
 
-  return { range, unit, columns: cols, rows: overall.rows, unclassified: overall.unclassified };
+  return { range, unit, columns: cols, rows: overall.rows,
+    unclassified: overall.unclassified, noDefence: overall.noDefence };
 }
 
 /* ---- one drill, over a chosen stretch of dates --------------------------
@@ -934,7 +983,7 @@ export function reportTable(sessions, blocks, drills, range, unit, { categories 
  * how many those were. Counting an untimed run as zero live minutes would
  * report a shortest-live of 0:00 for a drill he simply did not time.
  */
-export function drillReport(sessions, blocks, drills, range) {
+export function drillReport(sessions, blocks, drills, range, { contactRows = null } = {}) {
   const dateOf = new Map(sessions.map((s) => [s.id, s.date]));
   const gameDayOf = new Map(sessions.map((s) => [s.id, s.gameDay || null]));
   const library = new Map(drills.map((d) => [d.id, d]));
@@ -966,6 +1015,9 @@ export function drillReport(sessions, blocks, drills, range) {
       name: g.name,
       category: categoryOfBlock(g.runs[g.runs.length - 1].block, library),
       matchup: blockMatchup(g.runs[g.runs.length - 1].block, library),
+      // Which contact row this drill's list is grouped under. Same rules as
+      // the table, so one PDF never says two different things about a drill.
+      contactRow: contactRowOf(g.runs[g.runs.length - 1].block, library, contactRows),
       lastDate: g.lastDate,
       ...spreadOf(g.runs.map((r) => r.block)),
       byGameDay: order

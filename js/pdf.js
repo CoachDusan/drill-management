@@ -292,8 +292,8 @@ export function renderReportPdf(model, branding = {}, JsPDF, { compress = true, 
 
 /* Column widths by table kind. Anything not listed shares what is left. */
 const WIDTHS = {
-  drill: { 0: 62, 1: 36, 2: 15, 7: 16 },
-  practice: { 0: 9, 1: 78, 2: 40, 3: 24 },
+  drill: { 0: 60, 1: 34, 2: 14, 4: 16 },
+  practice: { 0: 86, 1: 44 },
   'category-simple': { 0: 70 },
   category: { 0: 44 },
 };
@@ -310,6 +310,12 @@ function drawTable(pdf, block, startY, { accent, light }) {
   const align = (i) => (cols[i] && cols[i].align === 'right' ? 'right' : 'left');
 
   const columnStyles = {};
+  /* A column marked `emph` is the one he reads first — the average and the
+     live % in a drill list, the live time in a practice sheet. Bold, on a
+     tint of the accent, so it is found without hunting across the row. */
+  cols.forEach((c, i) => {
+    if (c.emph) columnStyles[i] = { fontStyle: 'bold', fillColor: light, textColor: [20, 20, 20] };
+  });
   if (grid) {
     // Totals and per-practice must not wrap their star onto a third line.
     cols.forEach((c, i) => { if (c.role === 'total') columnStyles[i] = { minCellWidth: 22 }; });
@@ -341,7 +347,12 @@ function drawTable(pdf, block, startY, { accent, light }) {
       const st = r.style === 'total' ? { fontStyle: 'bold', fillColor: [236, 236, 236] }
         : r.style === 'emph' ? { fontStyle: 'bold', fillColor: light }
           : r.style === 'matchup' ? { fillColor: [248, 248, 248] } : {};
-      return r.cells.map((cell, i) => ({ content: T(cell), styles: { ...st, halign: align(i) } }));
+      // A row style wins over the column tint, so a total row still reads as
+      // a total; an ordinary row keeps the emphasised column's own styling.
+      return r.cells.map((cell, i) => ({
+        content: T(cell),
+        styles: { ...st, halign: align(i) },
+      }));
     }),
   });
 }

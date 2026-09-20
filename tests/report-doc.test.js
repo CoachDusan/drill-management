@@ -71,19 +71,28 @@ const week = { from: D(0), to: D(6), label: '2 – 8 Mar' };
   ok('within a band, three runs beat one run of more minutes', names.indexOf('3on3 FC') < names.indexOf('1on1 HC'));
   eq('the bands are named between the rows',
     t.rows.filter((r) => r.style === 'group').map((r) => r.cells[0]),
-    ['Contact 5on5', 'Contact 1on1/2on2…', 'No defence']);
+    ['Contact 5on5', 'Small sided contact', 'Not contact']);
+
+  /* The two he reads are picked out and come first, before the spread:
+     "average full/live and live % are the most important informations". */
+  eq('average and live % lead the columns, and are marked for emphasis',
+    t.columns.map((c) => `${c.label}${c.emph ? '*' : ''}`),
+    ['Drill', 'Category', 'Times', 'Average*', 'Live %*', 'Total', 'Longest', 'Shortest']);
 
   const shell = t.rows.find((r) => r.cells[0] === 'Shell 5on0');
   // Every full/live pair: the live line must be a dash, never 0:00.
-  const liveLines = shell.cells.slice(3, 7).map((c) => c.split('\n')[1]);
+  const liveLines = [3, 5, 6, 7].map((i) => shell.cells[i].split('\n')[1]);
   eq('a drill nobody timed never shows 0:00 live', liveLines, ['—', '—', '—', '—']);
+  eq('and its live % is a dash too, not 0%', shell.cells[4], '—');
   ok('its times cell says it was timed on none of its runs', shell.cells[2] === '2\nlive on 0', shell.cells[2]);
 
   const sorted = sortDrillRows([
-    { name: 'b', matchup: 'unknown', runs: 9, minutes: 99 },
-    { name: 'a', matchup: 'unopposed', runs: 1, minutes: 1 },
+    { name: 'c', contactRow: 'unknown', runs: 9, minutes: 99 },
+    { name: 'b', contactRow: null, runs: 1, minutes: 1 },
+    { name: 'a', contactRow: 'transition', runs: 1, minutes: 1 },
   ]);
-  eq('matchup-unknown drills go after no defence', sorted.map((r) => r.name), ['a', 'b']);
+  eq('contact first, then the rest, then what cannot be placed',
+    sorted.map((r) => r.name), ['a', 'b', 'c']);
 }
 
 /* ---- cells ---- */
@@ -111,16 +120,21 @@ eq('chosen dates follow their column unit', reportKind('custom', 'week').breakdo
   ok('and never claims days outside the month', wk1.sub.split('\n')[0] === '1.3.', wk1.sub);
   ok('the file is named for what it is', plain.fileName === 'Weekly report 2026-03-02 to 2026-03-08.pdf', plain.fileName);
   eq('three practices counted', plain.tiles[0].value, '3');
-  eq('contact 5on5 has its own tile', plain.tiles[3].value, '20:00');
+  eq('the tiles are the five he reads',
+    plain.tiles.map((t) => t.label), ['Practices', 'Court time', 'Live time', 'Contact', '5on5 live']);
+  // Contact is every contact row added: the 5on5 scrimmage plus all the
+  // small-sided live work. The unopposed shell drill is in neither.
+  eq('contact is every contact row added up', plain.tiles[3].value, '92:00');
+  eq('and 5on5 live is the whole-squad row on its own', plain.tiles[4].value, '20:00');
   ok('a partly timed cell brings its footnote', plain.footnotes.some((f) => f.indexOf('* This live figure') === 0));
-  ok('and the contact-rows explanation travels with the table', plain.footnotes.some((f) => f.indexOf('Contact rows come from') === 0));
+  ok('and the contact-rows explanation travels with the table', plain.footnotes.some((f) => f.indexOf('The contact rows are a second cut') === 0));
 
   const each = buildReportDoc({ period: 'week', unit: 'day', range: week, sessions, blocks, drills, breakdown: true });
   const sheets = each.sections.slice(2);
   eq('each practice on its own adds one sheet per practice', sheets.length, 3);
   ok('the first sheet starts a new page', sheets[0].pageBreak === true);
   ok('a sheet names its game day and label', sheets[1].sub === 'GD-2 · Shootaround', sheets[1].sub);
-  const order = sheets[1].blocks[0].rows.filter((r) => r.style !== 'total').map((r) => r.cells[1]);
+  const order = sheets[1].blocks[0].rows.filter((r) => r.style !== 'total').map((r) => r.cells[0]);
   eq('a practice sheet is in the order it ran, as he dragged it', order, ['Shell 5on0', '5on5 HC', '3on3 FC']);
 }
 
@@ -154,6 +168,36 @@ eq('chosen dates follow their column unit', reportKind('custom', 'week').breakdo
   const doc = buildReportDoc({ period: 'day', unit: 'day', range: { from: D(1), to: D(1), label: 'Tue 3 Mar' }, sessions, blocks, drills });
   eq('a daily report is the practice itself', doc.sections.length, 1);
   eq('with its categories under the running order', doc.sections[0].blocks.map((b) => b.kind), ['practice', 'category-simple']);
+
+  /* "I don't need the icon practices 1 — because I know it is only 1." One
+     practice, so the count goes and contact takes the space. */
+  eq('a one-practice day drops the practice count and shows contact instead',
+    doc.tiles.map((t) => t.label), ['Court time', 'Live time', 'Contact', '5on5 live']);
+
+  const sheet = doc.sections[0].blocks[0];
+  eq('no row numbers and no group column — the rows are already in order',
+    sheet.columns.map((c) => c.label), ['Drill', 'Category', 'Full time', 'Live time', 'Live %']);
+  ok('live time is the column picked out', sheet.columns[3].emph === true);
+}
+
+/* ---- he names the report himself ----
+ *
+ * A week in a team sport runs from one game to the next, so his weekly report
+ * is often a report over chosen dates — and it should say "Weekly report" at
+ * the top, because that is what it is. */
+{
+  const doc = buildReportDoc({
+    period: 'custom', unit: 'day', range: { from: D(0), to: D(2), label: '2.3. till 4.3.' },
+    sessions, blocks, drills, title: 'Weekly report',
+  });
+  eq('the title he typed is the heading', doc.title, 'Weekly report');
+  ok('and the file is named after it', doc.fileName.indexOf('Weekly report ') === 0, doc.fileName);
+
+  const auto = buildReportDoc({
+    period: 'custom', unit: 'day', range: { from: D(0), to: D(2), label: '2.3. till 4.3.' },
+    sessions, blocks, drills,
+  });
+  eq('without one, the period still names the report', auto.title, 'Report for chosen dates');
 }
 
 /* ---- nothing recorded ---- */

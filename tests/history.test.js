@@ -15,7 +15,7 @@ import {
   categoryByGameDay, drillWindowAverages,
   drillRollups, categoryMix, playerDaySeries, playerTotals, comparePeriods,
   startOfWeek, startOfMonth, endOfMonth, daysBetween, periodRange, columnUnitFor,
-  columnsFor, blockMatchup, reportRowsFor, reportTable, drillReport, spreadOf,
+  columnsFor, blockMatchup, contactRowOf, reportRowsFor, reportTable, drillReport, spreadOf,
   gameDayCounts, perPractice, REPORT_GAME_DAYS,
 } from '../js/history.js';
 import { acwrSeries, provisionalNote } from '../js/load.js';
@@ -447,13 +447,19 @@ const blk = (sessionId, intensity, minutes, extra = {}) => ({
   eq('Defense is absent on the second, not zeroed', cellOf('Defense', 1), null);
   eq('Transition on the second day', cellOf('Transition', 1).minutes, 8);
 
-  eq('small-sided contact is the 1v1 only', cellOf('Contact 1on1/2on2…', 0).minutes, 15);
-  eq('5on5 contact is the defensive drill plus the scrimmage',
-     cellOf('Contact 5on5', 0).minutes, 40);
+  /* THE CONTACT ROWS COME FROM THE CATEGORY (his spec, 2026-09-20), with the
+     grid used only where he asked for it: the old single "Live / scrimmage"
+     category splits by how many are a side, and the Defense drills are
+     counted only when there is live play inside them. */
+  eq('small-sided contact is the 1v1 only', cellOf('Small sided contact', 0).minutes, 15);
+  eq('the 5on5 row is the scrimmage, not the defensive drill',
+     cellOf('Contact 5on5', 0).minutes, 25);
+  eq('the defensive drill has its own row', cellOf('Shell drill w/contact', 0).minutes, 15);
+  eq('and transition has its own', cellOf('Transition w/contact', 1).minutes, 8);
 
   // "Whole contact" is the two rows ADDED, and the unopposed shooting is not
   // in it — the whole point of the row.
-  eq('whole contact adds the two contact rows', cellOf('Whole contact', 0).minutes, 55);
+  eq('whole contact adds every contact row', cellOf('Whole contact', 0).minutes, 55);
   /* The category rows and the contact rows are two different cuts of the same
      runs, not a hierarchy. The contested transition drill is counted under
      Transition AND inside Whole contact; the unopposed shooting is in neither
@@ -498,8 +504,9 @@ const blk = (sessionId, intensity, minutes, extra = {}) => ({
   const sessions = [ses('s', D(0))];
   const blocks = [
     blk('s', 5, 10, { drillId: 'known', category: 'Defense', situation: 1, contact: true }),
-    // Recorded before the snapshot existed, and its drill has since been deleted.
-    blk('s', 5, 30, { drillId: 'deleted', category: 'Defense', situation: null, contact: true }),
+    // Recorded before the snapshot existed, and its drill has since been
+    // deleted: there is no category to place it under, now or ever.
+    blk('s', 5, 30, { drillId: 'deleted', category: null, situation: null, contact: true }),
   ];
   const table = reportTable(sessions, blocks, drills, periodRange('day', D(0)), 'day');
   const row = (l) => table.rows.find((r) => r.label === l);
@@ -507,7 +514,66 @@ const blk = (sessionId, intensity, minutes, extra = {}) => ({
   eq('the unclassifiable run is kept out of the contact total', row('Whole contact').minutes, 10);
   eq('and reported instead of vanishing', table.unclassified.runs, 1);
   eq('with its minutes named', table.unclassified.minutes, 30);
-  eq('while the category row still counts all of it', row('Defense').minutes, 40);
+  eq('while the day still counts all of it', table.columns[0].total.minutes, 40);
+}
+
+/* ---- which drills are contact: his rules, not the grid's -------------
+ *
+ * The fault that prompted this: a 6on6 warm-up, entered as 5v5 with live
+ * defence because the matchup dial stops at five a side, was being counted as
+ * whole-squad contact. "Definitely don't count it as a 5on5." Contact now
+ * comes from the category, so filing it as a warm-up is the whole fix.
+ */
+{
+  const drills = [
+    { id: 'w6',   category: 'Warm-up',          situation: 1, contact: true },
+    { id: 'd5',   category: '5on5 live',        situation: 1, contact: true },
+    { id: 'dSml', category: 'Small-sided live', situation: 3, contact: true },
+    { id: 'c5',   category: 'Continuous games', situation: 1, contact: true },  // 5on5on5
+    { id: 'c4',   category: 'Continuous games', situation: 2, contact: true },  // 4on4on4
+    { id: 'shell',category: 'Defense',          situation: 2, contact: true },
+    { id: 'walk', category: 'Defense',          situation: 2, contact: false },
+    { id: 'tr',   category: 'Transition',       situation: 3, contact: true },
+  ];
+  const lib = new Map(drills.map((d) => [d.id, d]));
+  const runOf = (d) => ({ drillId: d.id, category: d.category, situation: d.situation, contact: d.contact });
+  const rowFor = (id, map = null) => contactRowOf(runOf(drills.find((d) => d.id === id)), lib, map);
+
+  eq('a 6on6 warm-up entered as 5v5 is not contact at all', rowFor('w6'), null);
+  eq('5on5 live is whole-squad contact', rowFor('d5'), 'contact5');
+  eq('small-sided live is small-sided contact', rowFor('dSml'), 'contactSmall');
+  eq('5on5on5 counts with the 5on5 contact', rowFor('c5'), 'contact5');
+  eq('4on4on4 counts with the small-sided contact', rowFor('c4'), 'contactSmall');
+  eq('a defence drill with live play inside is a shell drill', rowFor('shell'), 'shell');
+  eq('a defence drill with nobody defending is not contact', rowFor('walk'), 'noDefence');
+  eq('transition is its own contact row', rowFor('tr'), 'transition');
+
+  // His vocabulary, so the mapping is his too — Settings can move a category
+  // in or out, and the defaults are only a first guess from the name.
+  eq('a category he marks as not contact drops out',
+     rowFor('tr', { Transition: null }), null);
+  eq('and one he adds is counted',
+     rowFor('w6', { 'Warm-up': 'contactSmall' }), 'contactSmall');
+
+  // A run whose drill was never set up has no category of its own. Calling it
+  // "not contact" would quietly shrink the contact totals.
+  eq('a drill that has never been set up cannot be placed',
+     contactRowOf({ drillId: 'new', category: null, detailsPending: true, contact: null },
+       new Map([['new', { id: 'new', unrated: true }]])), 'unknown');
+}
+
+/* A drill in a contact category but recorded with no live defence is left out
+   of the contact rows AND said out loud — he expects all his transition work
+   to be in there, so a total that is quietly short is worse than no total. */
+{
+  const drills = [{ id: 'tr0', category: 'Transition', situation: 3, contact: false }];
+  const rows = reportRowsFor(
+    [blk('s', 5, 12, { drillId: 'tr0', category: 'Transition', situation: 3, contact: false })],
+    drills);
+  eq('unopposed transition is not in the contact rows',
+     rows.rows.find((r) => r.key === 'band:whole').minutes, 0);
+  eq('but it is reported rather than hidden', rows.noDefence.runs, 1);
+  eq('with its minutes', rows.noDefence.minutes, 12);
 }
 
 /* ---- the spread of one drill ----------------------------------------

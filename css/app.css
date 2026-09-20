@@ -466,6 +466,9 @@ table.report .th-sub {
 }
 table.report .live-line { font-size: 13px; color: var(--text-2); margin-top: 2px; }
 table.report tr.emph td { font-weight: 650; background: var(--surface-2); }
+/* The same emphasis on any other table: the average row of a drill's spread,
+   which is the line he actually plans with. */
+table tr.emph td { font-weight: 650; background: var(--surface-2); }
 table.report td.total-col { background: var(--surface-2); }
 table.report tfoot td {
   border-top: 2px solid var(--line);

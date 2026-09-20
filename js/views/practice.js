@@ -221,8 +221,8 @@ function seasonCard(season, list, sessions) {
     h('div', { class: 'tiny', style: { marginTop: '8px' }, text: [
       `Preseason from ${fmtDay(season.start)}`,
       `Inseason from ${fmtDay(season.inseason)}`,
-      `Offseason from ${fmtDay(season.offseason)}`,
-      season.end ? `ends ${fmtDay(season.end)}` : null,
+      season.offseason ? `Offseason from ${fmtDay(season.offseason)}` : null,
+      season.end ? `Ends ${fmtDay(season.end)}` : 'No end date yet — it runs on until you set one',
     ].filter(Boolean).join(' · ') }),
     h('div', { class: 'btn-row', style: { marginTop: '10px' } }, [
       h('button', { class: 'btn btn-sm', onclick: () => editSeason(season, list, sessions) }, 'Edit dates'),
@@ -247,18 +247,25 @@ async function editSeason(existing, list, sessions) {
     const start = h('input', { type: 'date', value: suggestedStart });
     const label = textInput(existing ? existing.label : seasonsLib.suggestLabel(suggestedStart), { placeholder: 'e.g. 2026/2027' });
     const inseason = h('input', { type: 'date', value: existing && existing.inseason ? existing.inseason : '' });
-    const offseason = h('input', { type: 'date', value: existing && existing.offseason ? existing.offseason : '' });
-    const end = h('input', { type: 'date', value: existing && existing.end ? existing.end : '' });
+    /* THE SEASON ENDS WHEN THE OFFSEASON STARTS, and he does not track the
+       offseason (2026-09-20). So there is one date here, not two — and it is
+       the one he cannot know in advance, because how long the season runs
+       depends on results. Blank is the normal state: the season runs on.
+       A season set up before this that has an offseason date keeps meaning
+       what it meant — the day before it is the last day of the season. */
+    const legacyEnd = existing && !existing.end && existing.offseason
+      ? addDaysKey(existing.offseason, -1) : '';
+    const end = h('input', { type: 'date', value: (existing && existing.end) || legacyEnd });
     const errors = h('div', {});
 
     body.append(
       field('Season', label),
-      field('Preseason starts', start, 'The first day of this season.'),
       h('div', { class: 'form-row' }, [
+        field('Preseason starts', start, 'The first day of this season.'),
         field('Inseason starts', inseason, 'Leave blank until you know.'),
-        field('Offseason starts', offseason, 'Leave blank until you know.'),
       ]),
-      field('Season ends', end, 'Usually blank — the season then runs until the next one starts.'),
+      field('Season ends (last day)', end,
+        'Leave it blank until you know — the season runs on, and every practice you record keeps counting. When the season finishes, come back and set it. You can change it as often as you like.'),
       h('p', { class: 'tiny' },
         'Every practice belongs wherever its date falls, so you can change these dates at any time and every practice moves with them. Nothing is deleted.'),
       errors,
@@ -273,7 +280,9 @@ async function editSeason(existing, list, sessions) {
         label: label.value.trim(),
         start: start.value,
         inseason: inseason.value || null,
-        offseason: offseason.value || null,
+        // Not tracked. An older season that carried one has it folded into
+        // the end date above, so nothing about its practices changes.
+        offseason: null,
         end: end.value || null,
       };
       const problems = seasonsLib.validateSeason(candidate, list);

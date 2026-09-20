@@ -965,7 +965,7 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
   contains('the reports screen renders', root, 'Reports');
   contains('his own category rows are there', root, 'Defense');
   contains('and the contact rows the categories cannot produce', root, 'Contact 5on5');
-  contains('including the small-sided one', root, 'Contact 1on1/2on2');
+  contains('including the small-sided one', root, 'Small sided contact');
   contains('and the two of them added up', root, 'Whole contact');
 
   // The sentence he actually asked for: minutes of live game, not only a share.
@@ -1036,7 +1036,9 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
 
   rows = hist.reportRowsFor([after], [setUp]);
   ok('the report counts it as Defense', rows.rows.some((r) => r.label === 'Defense' && r.runs === 1));
-  ok('and as Contact 5on5', rows.rows.some((r) => r.key === 'band:contact5' && r.runs === 1));
+  // Filed under Defense with live play inside, so it is a shell drill with
+  // contact — his own row, not whole-squad contact.
+  ok('and in the shell-drill contact row', rows.rows.some((r) => r.key === 'band:shell' && r.runs === 1));
 
   // From here on it is an ordinary snapshot: re-filing the drill in March
   // must not rewrite what this practice was.
@@ -1109,6 +1111,91 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
   ok('the split is written', (await db.get(db.STORES.drills, bigLive.id)).category === '5on5 live');
 }
 
+/* ---- renaming a drill, and the practices already recorded ---------------
+ *
+ * He renamed his live drills in the library and the reports went on printing
+ * the old category, because a run keeps its own copy of the name and category
+ * from the day it ran. Correcting a name is not the same thing as deciding a
+ * drill is now something else, and only he knows which one it is — so the app
+ * asks, once, with the count in front of him.
+ *
+ * What must NOT move either way: the intensity, matchup and movement tags of
+ * those runs. They are what the load was worked out from.
+ */
+{
+  await db.clearAll();
+  await flush();
+  const { staleRuns, relabelRuns, pendingRelabels, renameCategory, categoryUsage } =
+    await import('../js/sync.js');
+  const hist = await import('../js/history.js');
+
+  const drill = makeDrill({ name: '5on5, HC+2', category: 'Live / Scrimmage (5on5)', situation: 1, contact: true, unrated: false });
+  await db.put(db.STORES.drills, drill);
+  const ses = makeSession({ date: ago(3), status: 'complete', endedAt: new Date().toISOString() });
+  await db.put(db.STORES.sessions, ses);
+  const run = makeBlock({
+    sessionId: ses.id, drillId: drill.id, drillName: drill.name, category: drill.category,
+    situation: 1, contact: true, intensity: 7.3, elapsedMs: 20 * 60000, endedAt: new Date().toISOString(),
+  });
+  await db.put(db.STORES.blocks, run);
+
+  // He re-files it in the library, exactly as he did on the tablet.
+  const renamed = { ...drill, name: '5on5, HC+2 (live)', category: '5on5 live' };
+  await db.put(db.STORES.drills, renamed);
+
+  const blocks = await db.getAll(db.STORES.blocks);
+  ok('the recorded run is spotted as being under the old name',
+    staleRuns(blocks, renamed).length === 1);
+  const waiting = await pendingRelabels();
+  ok('and Settings can list it after the fact',
+    waiting.length === 1 && waiting[0].runs === 1
+    && waiting[0].oldCategories[0] === 'Live / Scrimmage (5on5)', JSON.stringify(waiting));
+
+  const before = await db.get(db.STORES.blocks, run.id);
+  ok('until he says so, the report still shows what was recorded',
+    before.category === 'Live / Scrimmage (5on5)');
+
+  const n = await relabelRuns(renamed);
+  const after = await db.get(db.STORES.blocks, run.id);
+  ok('updating touches the run', n === 1);
+  ok('the name follows the library', after.drillName === '5on5, HC+2 (live)', after.drillName);
+  ok('and so does the category', after.category === '5on5 live', after.category);
+  ok('but the intensity of that day is untouched', after.intensity === 7.3, String(after.intensity));
+  ok('and so is the matchup it was recorded with', after.situation === 1 && after.contact === true);
+  ok('nothing is left waiting afterwards', (await pendingRelabels()).length === 0);
+
+  /* Renaming a category does the whole shelf at once — one tap instead of
+     opening twenty drills, which is what went wrong the first time. */
+  const other = makeDrill({ name: '3 on 2 FC', category: 'Transition', situation: 3, contact: true, unrated: false });
+  await db.put(db.STORES.drills, other);
+  await db.put(db.STORES.blocks, makeBlock({
+    sessionId: ses.id, drillId: other.id, drillName: other.name, category: 'Transition',
+    situation: 3, contact: true, intensity: 6, elapsedMs: 10 * 60000, endedAt: new Date().toISOString(),
+  }));
+  const usage = categoryUsage(await db.getAll(db.STORES.drills), await db.getAll(db.STORES.blocks));
+  ok('Settings lists each category with what is filed under it',
+    usage.some((u) => u.name === 'Transition' && u.drills === 1 && u.runs === 1), JSON.stringify(usage));
+
+  const moved = await renameCategory('Transition', 'Advantage games (transition)', { runsToo: true });
+  ok('the drill moves', moved.drills === 1 && moved.runs === 1);
+  ok('and so does what was already recorded',
+    (await db.getAll(db.STORES.blocks)).some((b) => b.category === 'Advantage games (transition)'));
+  ok('the renamed category is still a contact category',
+    hist.reportRowsFor(await db.getAll(db.STORES.blocks), await db.getAll(db.STORES.drills))
+      .rows.some((r) => r.key === 'band:transition' && r.runs === 1));
+
+  // Leaving them alone has to stay possible: it is the whole reason it asks.
+  const untouched = makeDrill({ name: 'Old drill', category: 'Shooting', unrated: false });
+  await db.put(db.STORES.drills, untouched);
+  await db.put(db.STORES.blocks, makeBlock({
+    sessionId: ses.id, drillId: untouched.id, drillName: 'Old drill', category: 'Shooting',
+    intensity: 3, elapsedMs: 5 * 60000, endedAt: new Date().toISOString(),
+  }));
+  await db.put(db.STORES.drills, { ...untouched, category: 'Warm-up' });
+  ok('a change he has not confirmed changes nothing on its own',
+    (await db.getAll(db.STORES.blocks)).some((b) => b.drillName === 'Old drill' && b.category === 'Shooting'));
+}
+
 /* ---- the By drill search keeps the box he is typing in ----
  * Every keystroke used to re-render the whole screen, which destroyed the
  * input: the keyboard closed and the page jumped to the top. */
@@ -1165,7 +1252,10 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
   let modal = lastModal();
   ok('the season editor opens', !!modal);
   let inputs = modal.querySelectorAll('input');
-  ok('it asks for a name and four dates', inputs.length === 5, String(inputs.length));
+  /* A name, preseason, inseason, and the day the season ends. There is no
+     offseason date: he does not track the offseason, the season simply ends,
+     and he does not know when — so it is one date he can fill in later. */
+  ok('it asks for a name and three dates', inputs.length === 4, String(inputs.length));
   ok('the first season starts at the first practice ever recorded, so nothing is left outside',
     inputs[1].value <= ago(200), inputs[1].value);
 

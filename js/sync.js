@@ -45,6 +45,121 @@ export async function followLibrary(drill) {
   return waiting.length;
 }
 
+/* ---- a drill renamed or re-filed after it has already been run ----------
+ *
+ * A run keeps its own copy of the drill's name and category, so that re-filing
+ * a drill in March cannot rewrite what November's practices were made of. The
+ * coach hit the other side of that (2026-09-20): he renamed his live drills
+ * "5on5 live", and the reports went on printing "Live / Scrimmage (5on5)" for
+ * every practice he had already recorded.
+ *
+ * Both behaviours are right in different situations, and neither the app nor
+ * anyone else can tell which one it is — correcting a name is not the same
+ * thing as changing what a drill is. So the app asks, once, at the moment he
+ * saves the change, and says how many practices it would touch. See
+ * js/views/drills.js.
+ *
+ * Only the NAME and the CATEGORY. Intensity, matchup and movement tags stay
+ * exactly as they were recorded: those are what the load number was built
+ * from, and rewriting them would change what a practice cost.
+ */
+export function staleRuns(blocks, drill) {
+  if (!drill) return [];
+  return blocks.filter((b) => b.drillId === drill.id
+    && !b.detailsPending && !b.unrated
+    && ((b.drillName && b.drillName !== drill.name)
+      || (b.category && b.category !== drill.category)));
+}
+
+/** Bring those runs up to the library's current name and category. */
+export async function relabelRuns(drill) {
+  const blocks = await db.getAll(db.STORES.blocks);
+  const stale = staleRuns(blocks, drill);
+  for (const b of stale) {
+    await db.put(db.STORES.blocks, { ...b, drillName: drill.name, category: drill.category });
+  }
+  return stale.length;
+}
+
+/**
+ * Every drill whose recorded runs are under an older name or category.
+ *
+ * This is the catch-up for changes already made: he re-filed his library by
+ * hand before the app ever offered, so the question has to be askable after
+ * the fact as well as at the moment of saving. Settings lists these.
+ */
+export async function pendingRelabels() {
+  const [drills, blocks] = await Promise.all([
+    db.getAll(db.STORES.drills), db.getAll(db.STORES.blocks),
+  ]);
+  const out = [];
+  for (const d of drills) {
+    if (d.unrated) continue;
+    const stale = staleRuns(blocks, d);
+    if (!stale.length) continue;
+    out.push({
+      drill: d,
+      runs: stale.length,
+      oldNames: [...new Set(stale.map((b) => b.drillName).filter((n) => n && n !== d.name))],
+      oldCategories: [...new Set(stale.map((b) => b.category).filter((c) => c && c !== d.category))],
+    });
+  }
+  return out.sort((a, b) => b.runs - a.runs);
+}
+
+/* ---- renaming a category ------------------------------------------------
+ *
+ * "You gave me the ideas and we agreed on changes… but the changes are not
+ * visible" — the new names were offered in the drill editor, one drill at a
+ * time, and the only way to apply them was to open all twenty. A category is
+ * one word that labels a whole shelf of drills, so it gets renamed in one
+ * place. Renaming onto a name that already exists merges the two, which is
+ * how "Transition" becomes "Advantage games (transition)".
+ */
+export function categoryUsage(drills, blocks) {
+  const counts = new Map();
+  const bump = (name, key) => {
+    if (!name) return;
+    if (!counts.has(name)) counts.set(name, { name, drills: 0, runs: 0 });
+    counts.get(name)[key]++;
+  };
+  for (const d of drills) if (!d.archived) bump(d.category, 'drills');
+  for (const b of blocks) bump(b.category, 'runs');
+  return [...counts.values()].sort((a, b) => b.drills - a.drills || a.name.localeCompare(b.name));
+}
+
+export async function renameCategory(from, to, { runsToo = true } = {}) {
+  const [drills, blocks] = await Promise.all([
+    db.getAll(db.STORES.drills), db.getAll(db.STORES.blocks),
+  ]);
+  let movedDrills = 0, movedRuns = 0;
+  for (const d of drills) {
+    if (d.category !== from) continue;
+    await db.put(db.STORES.drills, { ...d, category: to });
+    movedDrills++;
+  }
+  if (runsToo) {
+    for (const b of blocks) {
+      if (b.category !== from) continue;
+      await db.put(db.STORES.blocks, { ...b, category: to });
+      movedRuns++;
+    }
+  }
+  // Keep his own list of categories and the contact mapping in step, so the
+  // renamed category does not lose the contact row it was assigned.
+  const custom = await db.getMeta('customCategories', []);
+  if (custom.includes(from)) {
+    await db.setMeta('customCategories', [...new Set(custom.map((c) => (c === from ? to : c)))]);
+  }
+  const map = await db.getMeta('contactRows', null);
+  if (map && Object.prototype.hasOwnProperty.call(map, from)) {
+    const next = { ...map, [to]: map[from] };
+    delete next[from];
+    await db.setMeta('contactRows', next);
+  }
+  return { drills: movedDrills, runs: movedRuns };
+}
+
 /* ---- repairing runs recorded before this existed -------------------------
  *
  * Before 2026-09-12 a courtside run copied the new drill's defaults, and the

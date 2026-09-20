@@ -26,11 +26,11 @@
  */
 
 import * as db from '../db.js';
-import { toDateKey, addDays, MATCHUP_BANDS, formatDate } from '../models.js';
+import { toDateKey, addDays, CONTACT_ROWS, formatDate } from '../models.js';
 import { fmtMinutes, fmtLoad, fmtDensity } from '../load.js';
 import * as hist from '../history.js';
 import * as seasonsLib from '../seasons.js';
-import { h, mount, emptyState, toast, openModal, field, downloadBlob } from '../ui.js';
+import { h, mount, emptyState, toast, openModal, field, textInput, downloadBlob } from '../ui.js';
 import { buildReportDoc, reportKind, sortDrillRows } from '../report-doc.js';
 import { loadPdfEngine, renderReportPdf, ACCENTS } from '../pdf.js';
 
@@ -61,7 +61,7 @@ export function teardown() {}
 export async function render(root) {
   rootEl = root;
 
-  const [allSessions, blocks, drills, categories, seasonList, pickedSeason, savedPhase] = await Promise.all([
+  const [allSessions, blocks, drills, categories, seasonList, pickedSeason, savedPhase, contactRows] = await Promise.all([
     db.getAll(db.STORES.sessions),
     db.getAll(db.STORES.blocks),
     db.getAll(db.STORES.drills),
@@ -69,6 +69,7 @@ export async function render(root) {
     db.getMeta('seasons', []),
     db.getMeta('viewSeasonId', null),
     db.getMeta('reportPhase', null),
+    db.getMeta('contactRows', null),
   ]);
 
   /* SEASON AND PHASE COME FIRST, then the period inside them. "Only inseason
@@ -110,11 +111,12 @@ export async function render(root) {
 
   const table = hist.reportTable(shown, blocks, drills, range, unit, {
     categories: categories && categories.length ? categories : null,
+    contactRows,
   });
   const inRange = shown.filter((s) => s.date >= range.from && s.date <= range.to);
   const rangeBlocks = blocks.filter((b) => inRange.some((s) => s.id === b.sessionId));
   const totals = hist.aggregate(rangeBlocks);
-  const perDrill = hist.drillReport(shown, blocks, drills, range);
+  const perDrill = hist.drillReport(shown, blocks, drills, range, { contactRows });
   // Only a game-day report averages per practice: "what does a GD-1 look
   // like" is the question. A plain week is read as totals, as before.
   const perN = gameDayFilter ? inRange.length : null;
@@ -130,6 +132,7 @@ export async function render(root) {
   pdfContext = {
     period, unit, range, sessions: shown, blocks, drills,
     categories: categories && categories.length ? categories : null,
+    contactRows,
     scopeLabel: season ? `${season.label} · ${seasonsLib.phaseLabel(phase)}` : null,
     gameDay: gameDayFilter, perN,
     notes: [
@@ -150,6 +153,7 @@ export async function render(root) {
     totalsPanel(totals, inRange, perN),
     tablePanel(table, perN),
     unclassifiedNote(table.unclassified),
+    noDefenceNote(table.noDefence),
     drillPanel(sortDrillRows(perDrill)),
   );
 }
@@ -179,7 +183,10 @@ function scopeBar(season, list) {
         }, seasonsLib.sortSeasons(list).reverse().map((sea) =>
           h('option', { value: sea.id, selected: sea.id === season.id }, sea.label)))
         : h('span', { class: 'chip on', style: { alignSelf: 'center' }, text: season.label }),
-      ...['all', 'preseason', 'inseason', 'offseason'].map((k) => {
+      /* Offseason is only offered once a season actually has one. He does not
+         track the offseason — the season simply ends — so an "Offseason · no
+         date" button that can never be tapped is one more thing to explain. */
+      ...['all', 'preseason', 'inseason', ...(list.some((sea) => sea.offseason) ? ['offseason'] : [])].map((k) => {
         const r = seasonsLib.phaseRange(season, k, list);
         return h('button', {
           class: k === phase ? 'btn btn-sm btn-primary' : 'btn btn-sm',
@@ -425,15 +432,15 @@ function tablePanel(table, perN = null) {
     ]),
 
     h('p', { class: 'tiny', style: { marginTop: '8px' } },
-      'Contact rows come from the matchup on the drill, not from its category, so a drill appears in one category row and one contact row. “Whole contact” is the two contact rows added together — it is not a third bucket.'),
+      'The contact rows are a second cut of the same drills, not a further breakdown: a contested transition drill is counted once under Transition and once under Transition w/contact. “Whole contact” is the four contact rows added together. Which categories count as contact is set in Settings.'),
     perN ? h('p', { class: 'tiny' },
       `“Per practice” divides by all ${perN} ${gameDayFilter} practice${perN === 1 ? '' : 's'} in these dates — including the ones that did not use that row. A category you skipped on one of them counts as zero there, which is how much of it a ${gameDayFilter} really has.`) : null,
   ]);
 }
 
 function matchupNote(row) {
-  if (row.key === 'band:whole') return 'Contact 5on5 + smaller, added';
-  const b = MATCHUP_BANDS.find((x) => `band:${x.key}` === row.key);
+  if (row.key === 'band:whole') return `${CONTACT_ROWS.length} contact rows, added`;
+  const b = CONTACT_ROWS.find((x) => `band:${x.key}` === row.key);
   return b ? b.note : '';
 }
 
@@ -474,7 +481,18 @@ function unclassifiedNote(u) {
   if (!u || !u.runs) return null;
   return h('div', { class: 'note warn' }, [
     h('strong', { text: `${u.runs} run${u.runs === 1 ? '' : 's'} (${fmtMinutes(u.minutes)}) are missing from the contact rows. ` }),
-    'The app cannot tell whether they were contested. Usually that is a drill added during practice and not set up yet — open it in Drills, set the matchup, and these runs are counted from then on. Otherwise it is an old run whose drill has been deleted. They still count in the totals.',
+    'The app cannot tell which category they belong to, so it cannot say whether they were contact. Usually that is a drill added during practice and not set up yet — open it in Drills, give it a category, and these runs are counted from then on. Otherwise it is an old run whose drill has been deleted. They still count in the totals.',
+  ]);
+}
+
+/* A drill filed in a contact category but recorded with no live defence is
+   left out of the contact rows, and that is said rather than left to be
+   noticed as a total that looks light. */
+function noDefenceNote(n) {
+  if (!n || !n.runs) return null;
+  return h('div', { class: 'note' }, [
+    h('strong', { text: `${n.runs} run${n.runs === 1 ? '' : 's'} (${fmtMinutes(n.minutes)}) in a contact category had no live defence. ` }),
+    'They are counted in their category and in the totals, but not in the contact rows — unopposed work is not contact. If one of them should be, set it to live defence in Drills.',
   ]);
 }
 
@@ -560,9 +578,11 @@ function spreadTable(s) {
         h('th', { class: 'num', text: 'Live %' }),
       ])),
       h('tbody', {}, [
+        // Average and its live % are what he plans with, so that row is
+        // picked out — on screen and in the PDF (2026-09-20).
+        spreadRow('Average', s.meanMinutes, s.meanLiveMinutes, true),
         spreadRow('Longest', s.maxMinutes, s.maxLiveMinutes),
         spreadRow('Shortest', s.minMinutes, s.minLiveMinutes),
-        spreadRow('Average', s.meanMinutes, s.meanLiveMinutes),
         h('tr', {}, [
           h('td', { text: 'Total' }),
           h('td', { class: 'num', text: fmtMinutes(s.minutes) }),
@@ -581,9 +601,9 @@ function spreadTable(s) {
   ]);
 }
 
-function spreadRow(label, mins, live) {
+function spreadRow(label, mins, live, emph = false) {
   const density = (mins && live !== null && live !== undefined) ? live / mins : null;
-  return h('tr', {}, [
+  return h('tr', { class: emph ? 'emph' : '' }, [
     h('td', { text: label }),
     h('td', { class: 'num', text: mins === null ? '—' : fmtMinutes(mins) }),
     h('td', { class: 'num', text: (live === null || live === undefined) ? '—' : fmtMinutes(live) }),
@@ -602,14 +622,23 @@ async function makePdf() {
   const ctx = pdfContext;
   if (!ctx) return;
   const kind = reportKind(ctx.period, ctx.unit);
-  const [clubName, preparedBy, accent, logo] = await Promise.all([
+  const [clubName, preparedBy, accent, logo, savedTitles] = await Promise.all([
     db.getMeta('pdfClubName', ''), db.getMeta('pdfPreparedBy', ''),
     db.getMeta('pdfAccent', ACCENTS[0].hex), db.getMeta('pdfLogo', null),
+    db.getMeta('pdfTitles', {}),
   ]);
+  /* THE HEADING IS HIS TO WRITE. A week in a team sport runs from one game to
+     the next, not Monday to Sunday, so his weekly report is often a report
+     over chosen dates — and "Report for chosen dates" is not what he wants at
+     the top of it. The last title he used for this kind of report is offered
+     again, because he will write the same one next week. */
+  const defaultTitle = `${kind.title}${ctx.gameDay ? ` · ${ctx.gameDay}` : ''}`;
+  const rememberedTitle = (savedTitles && savedTitles[kind.key]) || '';
   const practices = ctx.sessions.filter((s) => s.date >= ctx.range.from && s.date <= ctx.range.to).length;
 
   const choice = await openModal('Make a PDF report', (body, done) => {
     let breakdown = false;
+    const titleInput = textInput(rememberedTitle || defaultTitle, { placeholder: defaultTitle });
     const catBox = h('input', { type: 'checkbox', checked: true });
     const drillBox = h('input', { type: 'checkbox', checked: true });
     const togetherRow = h('div', { class: 'btn-row' });
@@ -621,8 +650,8 @@ async function makePdf() {
     if (kind.breakdown) paintTogether();
 
     body.append(
-      h('div', { class: 'name', style: { fontWeight: '700', fontSize: '17px' },
-        text: `${kind.title}${ctx.gameDay ? ` · ${ctx.gameDay}` : ''}` }),
+      field('Title at the top of the report', titleInput,
+        'Call it whatever this report is — “Weekly report”, “Game week Zvezda”. It goes in the header, on every page and on the file name.'),
       h('div', { class: 'tiny', style: { marginBottom: '12px' },
         text: [ctx.range.label, ctx.scopeLabel, `${practices} practice${practices === 1 ? '' : 's'}`].filter(Boolean).join(' · ') }),
       kind.key === 'day'
@@ -636,7 +665,11 @@ async function makePdf() {
       !clubName && !logo ? h('p', { class: 'tiny', style: { marginTop: '10px' } },
         'Add your club name, logo and colour in Settings → PDF reports and they go on every report.') : null,
     );
-    return () => done({ breakdown, include: { categories: !!catBox.checked, drills: !!drillBox.checked } });
+    return () => done({
+      breakdown,
+      title: titleInput.value.trim() || defaultTitle,
+      include: { categories: !!catBox.checked, drills: !!drillBox.checked },
+    });
   }, { confirmLabel: 'Make PDF' });
 
   if (!choice) return;
@@ -645,9 +678,20 @@ async function makePdf() {
     return;
   }
 
+  // Remembered per kind of report, so next week's opens on the same words.
+  if (choice.title && choice.title !== defaultTitle) {
+    await db.setMeta('pdfTitles', { ...(savedTitles || {}), [kind.key]: choice.title });
+  } else if (rememberedTitle && choice.title === defaultTitle) {
+    const next = { ...(savedTitles || {}) };
+    delete next[kind.key];
+    await db.setMeta('pdfTitles', next);
+  }
+
   toast('Making the PDF…');
   try {
-    const model = buildReportDoc({ ...ctx, include: choice.include, breakdown: choice.breakdown });
+    const model = buildReportDoc({
+      ...ctx, include: choice.include, breakdown: choice.breakdown, title: choice.title,
+    });
     const JsPDF = await pdfEngine();
     const pdf = renderReportPdf(model, { clubName, preparedBy, accent, logo }, JsPDF);
     await savePdf(model.fileName, pdf, model);

@@ -6,7 +6,7 @@
  */
 
 import * as db from '../db.js';
-import { followLibrary } from '../sync.js';
+import { followLibrary, staleRuns, relabelRuns } from '../sync.js';
 import {
   makeDrill, DEFAULT_CATEGORIES, intensityInfo,
   INTENSITY_MODES, resolveIntensity, hasTissueTags, TISSUE, TISSUE_LEVELS,
@@ -290,10 +290,51 @@ export async function editDrill(existing, root) {
 
   // Runs of a drill added courtside were waiting on exactly this. See sync.js.
   const filled = await followLibrary(result);
+
+  /* A NAME OR A CATEGORY HE CHANGED: ask whether the practices already
+     recorded should change with it. Correcting what a drill is called is not
+     the same thing as deciding it is now a different drill, and only he knows
+     which one this is. Asked once, with the count in front of him. */
+  const renamed = existing && (existing.name !== result.name || existing.category !== result.category);
+  if (renamed) await offerRelabel(existing, result);
+
   toast(filled
     ? `Rated — ${filled} practice run${filled === 1 ? '' : 's'} now counted`
     : (existing ? 'Drill updated' : `“${result.name}” added`));
   await render(root);
+}
+
+/* What changed, in the words on the screen he changed it on, and what the
+ * reports will say either way. */
+async function offerRelabel(before, after) {
+  const blocks = await db.getAll(db.STORES.blocks);
+  const stale = staleRuns(blocks, after);
+  if (!stale.length) return;
+
+  const changes = [];
+  if (before.name !== after.name) changes.push(['Name', before.name, after.name]);
+  if (before.category !== after.category) changes.push(['Category', before.category, after.category]);
+
+  const n = stale.length;
+  const ok = await openModal('Change the practices you already recorded?', (body, done) => {
+    body.append(
+      h('p', { class: 'small', style: { marginTop: 0 } },
+        `This drill has already run in ${n} recorded practice run${n === 1 ? '' : 's'}. Each one kept the name and category it had on the day.`),
+      h('div', { class: 'list' }, changes.map(([what, from, to]) => h('div', { class: 'card', style: { marginBottom: 0 } }, [
+        h('div', { class: 'tiny', text: what }),
+        h('div', { text: `${from || '—'} → ${to || '—'}` }),
+      ]))),
+      h('p', { class: 'small' },
+        'Update them and every report says the new name from the first practice onwards. Leave them and the old reports stay exactly as they were printed, so the same drill appears under two names.'),
+      h('p', { class: 'tiny' },
+        'Either way, the intensity, matchup and movement tags of those runs are untouched — they are what the load was worked out from.'),
+    );
+    return () => done(true);
+  }, { confirmLabel: 'Update them', cancelLabel: 'Leave them as they were' });
+
+  if (!ok) return;
+  const changed = await relabelRuns(after);
+  toast(`${changed} recorded run${changed === 1 ? '' : 's'} updated`);
 }
 
 export async function archiveDrill(drill, root) {

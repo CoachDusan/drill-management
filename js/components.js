@@ -135,7 +135,7 @@ export function intensityGrid(drill, onChange) {
       sitNote.textContent = 'On the spot the matchup stops counting — 1v0 and 5v5 give the same number, because a free-throw line does not get harder when fewer people stand on it. Stationary work floors at 2.0; for anything lighter than that use “My own rating”.';
     } else {
       sitNote.textContent = situation === 1
-        ? '5v5 and 5v0 come out the same. The measured pair differs by 0.25 — less than this grid\u2019s own error. Use Rhythm to separate them: a non-stop 5v5 is not the same drill as one full of whistles.'
+        ? '5v5 and 5v0 come out the same. The measured pair differs by 0.25 — less than this grid\u2019s own error. Use Rhythm to separate them: a non-stop 5v5 is not the same drill as one full of whistles. More than five a side \u2014 6v6 in a warm-up \u2014 is rated here too: the scale bottoms out at five, and whether it counts as contact comes from the category you file it under, not from this dial.'
         : (contact ? '' : 'Unopposed work rates about one level easier than the same drill contested.');
     }
 

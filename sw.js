@@ -9,7 +9,7 @@
  * it lives in IndexedDB on the device.
  */
 
-const VERSION = 'v10';
+const VERSION = 'v11';
 const CACHE = `load-tracker-${VERSION}`;
 
 const SHELL = [

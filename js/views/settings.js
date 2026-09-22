@@ -10,11 +10,11 @@ import { h, mount, toast, confirmDanger, downloadFile, pickFile, toCSV, openModa
 import { ACCENTS } from '../pdf.js';
 import {
   toDateKey, resolveIntensity, DEFAULT_GROUPS, LIVE_CATEGORIES, LEGACY_LIVE_CATEGORY,
-  CONTACT_ROWS, BY_SIZE, contactRowForCategory,
+  CONTACT_ROLES, contactRowForCategory, offeredCategories,
 } from '../models.js';
 import {
   planLiveSplit, applyLiveSplit, pendingRelabels, relabelRuns,
-  categoryUsage, renameCategory,
+  categoryUsage, renameCategory, removeCategory,
 } from '../sync.js';
 
 export async function render(root) {
@@ -32,6 +32,17 @@ export async function render(root) {
   const liveSplitWaiting = liveSplit.drills.length + liveSplit.runs.length;
   const contactMap = await db.getMeta('contactRows', null);
   const usage = categoryUsage(drills, blocks);
+  const hiddenCategories = await db.getMeta('hiddenCategories', []);
+  /* Every category offered in the drill editor, whether or not anything is
+     filed under it yet — an unused starter category is exactly the kind he
+     needs to be able to remove. */
+  const usageByName = new Map(usage.map((u) => [u.name, u]));
+  const allCategories = [
+    ...usage,
+    ...offeredCategories(drills, customCategories, hiddenCategories)
+      .filter((c) => !usageByName.has(c))
+      .map((name) => ({ name, drills: 0, runs: 0 })),
+  ];
   const stale = await pendingRelabels();
   const groups = await db.getMeta('groups', DEFAULT_GROUPS);
   const lastBackup = await db.getMeta('lastBackupAt', null);
@@ -161,23 +172,21 @@ export async function render(root) {
 
       h('h3', { style: { marginTop: '18px' }, text: 'Drill categories' }),
       h('p', { class: 'tiny', style: { marginTop: 0 } },
-        'Every category you are using, with how much is filed under it. Renaming one here renames it on every drill at once — and onto a name you already use, it merges the two.'),
-      h('div', { class: 'list' }, usage.length
-        ? usage.map((u) => h('div', { class: 'row' }, [
+        'Every category offered when you file a drill, with how much is filed under it. Renaming one renames it on every drill at once — and onto a name you already use, it merges the two. Removing one that still has drills asks where to move them first.'),
+      h('div', { class: 'list' }, allCategories.length
+        ? allCategories.map((u) => h('div', { class: 'row' }, [
           h('div', { class: 'grow' }, [
             h('div', { class: 'name', text: u.name }),
-            h('div', { class: 'tiny', text: `${u.drills} drill${u.drills === 1 ? '' : 's'} · ${u.runs} recorded run${u.runs === 1 ? '' : 's'}` }),
+            h('div', { class: 'tiny', text: u.drills || u.runs
+              ? `${u.drills} drill${u.drills === 1 ? '' : 's'} · ${u.runs} recorded run${u.runs === 1 ? '' : 's'}`
+              : 'nothing filed under it' }),
           ]),
-          h('button', { class: 'btn btn-sm', onclick: () => renameCategoryFlow(u, usage, root) }, 'Rename…'),
+          h('div', { class: 'btn-row', style: { margin: 0 } }, [
+            h('button', { class: 'btn btn-sm', onclick: () => renameCategoryFlow(u, allCategories, root) }, 'Rename…'),
+            h('button', { class: 'btn btn-sm', onclick: () => removeCategoryFlow(u, allCategories, root) }, 'Remove…'),
+          ]),
         ]))
-        : [h('div', { class: 'tiny', style: { padding: '12px' }, text: 'No drills filed yet.' })]),
-      customCategories.length
-        ? h('div', { style: { marginTop: '10px' } }, [
-          h('div', { class: 'tiny', text: 'Categories you added yourself — remove one to stop it being offered. It never changes a drill or a practice.' }),
-          h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '7px', marginTop: '6px' } },
-            customCategories.map((c) => removableChip(c, () => removeCustom('customCategories', c, root)))),
-        ])
-        : null,
+        : [h('div', { class: 'tiny', style: { padding: '12px' }, text: 'No categories yet.' })]),
 
       /* Offered only while something is still filed under the old name. */
       liveSplitWaiting ? h('div', { class: 'note', style: { marginTop: '14px' } }, [
@@ -223,34 +232,32 @@ export async function render(root) {
 
 /* ---- which categories count as contact ----------------------------------
  *
- * His own definition, in his own words (2026-09-20): 5on5 live and 5on5on5
- * are Contact 5on5; the small-sided live work and 4on4on4 are Small sided
- * contact; the Defense drills "which has active play inside" are Shell drill
- * w/contact; Transition is Transition w/contact. Everything else is not
- * contact, whatever the matchup on the drill says — which is what keeps his
- * 6on6 warm-up, entered as 5v5 because there is no 6v6 on the dial, out of
- * the whole-squad contact total.
+ * His own definition (2026-09-20, sharpened 2026-09-22): three contact
+ * formats, with Live / Continuous / Shell inside the first two. A category is
+ * given a role; the role says whether it is always contact or only with live
+ * defence, and whether the drill's matchup decides 5on5 or small-sided. See
+ * models.js for the tree.
  *
  * It lives here rather than in the code because the categories are his and he
  * renames them. The app only guesses the first time, from the name.
  */
 function contactCard(usage, map, root) {
-  const options = [
-    { value: '', label: 'Not contact' },
-    ...CONTACT_ROWS.map((r) => ({ value: r.key, label: r.label })),
-    { value: BY_SIZE, label: 'By how many a side (5on5on5 → Contact 5on5, 4on4on4 → small sided)' },
-  ];
+  const options = [{ value: '', label: 'Not contact' }, ...CONTACT_ROLES];
   return h('div', { class: 'card' }, [
     h('h2', { style: { marginTop: 0 }, text: 'Which categories are contact' }),
     h('p', { class: 'small muted' },
-      'The contact rows in a report are a second cut of the same drills: a contested transition drill is counted once under Transition and once under Transition w/contact. Contact minutes are where collisions, contested rebounds and landing on someone’s foot come from, which is a different warning from load going up.'),
+      'Reports show three contact formats. 5on5 contact: Live, Continuous (5on5on5), Shell. Small-sided contact: Live, Continuous (3on3on3, 4on4on4), Shell (1on1 closeouts, 4on4 shell). Transition contact. Whole contact is all of them added.'),
+    h('p', { class: 'small muted' }, [
+      h('strong', { text: 'Contact time is the second stopwatch. ' }),
+      'Only the live part of a drill counts — on a shell drill that starts as a walk-through, start the second watch when it goes live. A contact drill you did not time shows as “not timed”, never as zero.',
+    ]),
     h('p', { class: 'small muted' },
-      'A drill only counts as contact if it is in one of these categories AND it is set to live defence. That is what separates the Defense drills with live play inside from the walk-throughs.'),
+      'Shell and Transition count only drills set to live defence. Live and Continuous always count. For Continuous and Shell, the drill’s matchup decides the size: 5v5 is 5on5 contact, fewer a side is small-sided.'),
     h('div', { class: 'list' }, usage.length
       ? usage.map((u) => {
         const current = contactRowForCategory(u.name, map) || '';
         const sel = h('select', {
-          style: { width: 'auto', maxWidth: '260px', minHeight: '40px' },
+          style: { width: 'auto', maxWidth: '300px', minHeight: '40px' },
           onchange: async (e) => {
             const next = { ...(map || {}) };
             next[u.name] = e.target.value || null;
@@ -450,6 +457,46 @@ async function chooseLogo(root) {
   } catch (err) {
     toast(err && err.message ? err.message : 'That image could not be read');
   }
+}
+
+/* Remove a category from the list. With nothing filed under it, that is all.
+   With drills still in it, he picks where they go — the app never guesses —
+   and the recorded runs follow unless he unticks it. */
+async function removeCategoryFlow(row, all, root) {
+  const inUse = row.drills + row.runs > 0;
+  const others = all.filter((u) => u.name !== row.name).map((u) => u.name);
+  const result = await openModal(`Remove “${row.name}”`, (body, done) => {
+    if (!inUse) {
+      body.append(h('p', { class: 'small' },
+        'Nothing is filed under it, so it just stops being offered when you file a drill.'));
+      return () => done({});
+    }
+    const sel = h('select', {}, [
+      h('option', { value: '', text: 'Choose a category…' }),
+      ...others.map((o) => h('option', { value: o, text: o })),
+    ]);
+    const runsBox = h('input', { type: 'checkbox', checked: true });
+    body.append(
+      field('Move its drills to', sel,
+        `${row.drills} drill${row.drills === 1 ? '' : 's'} and ${row.runs} recorded run${row.runs === 1 ? '' : 's'} are filed under it.`),
+      h('label', { class: 'field', style: { display: 'flex', gap: '10px', alignItems: 'center' } }, [
+        runsBox,
+        h('span', { text: 'Also move the practice runs already recorded' }),
+      ]),
+      h('p', { class: 'tiny' },
+        'With that ticked, every report from the first practice onwards shows the new category. The category you move them to keeps its own contact setting.'),
+    );
+    return () => {
+      if (!sel.value) { toast('Choose where the drills should go'); return; }
+      done({ moveTo: sel.value, runsToo: !!runsBox.checked });
+    };
+  }, { confirmLabel: 'Remove' });
+  if (!result) return;
+  const moved = await removeCategory(row.name, result);
+  toast(result.moveTo
+    ? `“${row.name}” removed — ${moved.drills} drill${moved.drills === 1 ? '' : 's'}${result.runsToo ? ` and ${moved.runs} run${moved.runs === 1 ? '' : 's'}` : ''} moved to “${result.moveTo}”`
+    : `“${row.name}” removed from the list`);
+  await render(root);
 }
 
 async function removeCustom(key, value, root) {

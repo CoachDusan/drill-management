@@ -87,6 +87,29 @@ export function cellFullLive(agg) {
   return `${fmtMinutes(agg.minutes)}\n${fmtMinutes(agg.liveMinutes)} · ${fmtDensity(agg.liveDensity)}${star}`;
 }
 
+/** A contact row's cell. Contact time is the second stopwatch, so it comes
+ *  first; the drill time it was part of sits underneath. An untimed contact
+ *  drill has no contact time — "not timed", never 0 and never its full length.
+ *  A star marks contact time that covers only some of the drills. */
+export function cellContact(agg) {
+  if (!agg || !agg.minutes) return '—';
+  if (!agg.timedRuns) return `not timed\nof ${fmtMinutes(agg.minutes)}`;
+  const star = agg.liveCoverage < 0.999 ? ' *' : '';
+  return `${fmtMinutes(agg.liveMinutes)}${star}\nof ${fmtMinutes(agg.minutes)}`;
+}
+
+/** The label a row carries in a PDF table: a part of a contact format is
+ *  indented under its format, so "Live" never stands on its own. */
+function rowLabel(row) {
+  return row.level === 'part' ? `    ${row.label}` : row.label;
+}
+
+function rowStyle(row) {
+  if (row.emphasis) return 'emph';
+  if (row.level === 'group') return 'matchup-group';
+  return row.kind === 'matchup' ? 'matchup' : 'normal';
+}
+
 function pair(full, live) {
   const f = full === null || full === undefined ? '—' : fmtMinutes(full);
   const l = live === null || live === undefined ? '—' : fmtMinutes(live);
@@ -103,6 +126,16 @@ function sumAggs(aggs) {
   out.liveCoverage = out.minutes ? out.timedMinutes / out.minutes : 0;
   return out;
 }
+
+/* How contact is counted, for people who never saw the app. The coach asked
+   for this to be written into the PDF "in an understandable way" — it goes
+   to the head coach and the medical staff, who read the number without the
+   definition otherwise. */
+export const CONTACT_EXPLAINED = [
+  'How contact is counted: contact time is only the part of a drill with real live play against a defence, timed on a second stopwatch — a 5on5 shell drill that starts as a walk-through counts only once it goes live. In the contact rows the top line is contact time and the line under it is the full drill time. A contact drill that was not timed says “not timed”: never zero, never its full length.',
+  'Three formats. 5on5 contact = Live (5on5 live drills) + Continuous (5on5on5) + Shell (5on5 shell once live). Small-sided contact = Live (small-sided live drills) + Continuous (3on3on3, 4on4on4) + Shell (1on1 closeouts, 4on4 shell once live). Transition contact = advantage games with live play. Whole contact = all of them. Live and continuous drills always count; defense and transition drills only when they go live.',
+  'The contact rows are a second look at the same drills, not extra time: a live transition drill appears once in its category and once in Transition contact.',
+];
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 /** "26.10." — how he writes dates himself ("26.10. till 22.12."). */
@@ -127,7 +160,7 @@ export function categoryTable(sessions, blocks, drills, range, unit, { categorie
   const t = hist.reportTable(sessions, blocks, drills, range, unit, { categories, contactRows });
   if (!t.columns.length || !t.rows.length) return null;
   const everything = sumAggs(t.columns.map((c) => c.total));
-  const per = (agg) => (perN ? [cellFullLive(hist.perPractice(agg, perN))] : []);
+  const per = (agg, f = cellFullLive) => (perN ? [f(hist.perPractice(agg, perN))] : []);
   return {
     type: 'table',
     kind: 'category',
@@ -141,10 +174,13 @@ export function categoryTable(sessions, blocks, drills, range, unit, { categorie
       ...(perN ? [{ label: 'Per practice', sub: `of ${perN}`, align: 'right', role: 'total' }] : []),
     ],
     rows: [
-      ...t.rows.map((row, i) => ({
-        style: row.emphasis ? 'emph' : row.kind === 'matchup' ? 'matchup' : 'normal',
-        cells: [row.label, ...t.columns.map((c) => cellFullLive(c.cells[i])), cellFullLive(row), ...per(row)],
-      })),
+      ...t.rows.map((row, i) => {
+        const f = row.kind === 'matchup' ? cellContact : cellFullLive;
+        return {
+          style: rowStyle(row),
+          cells: [rowLabel(row), ...t.columns.map((c) => f(c.cells[i])), f(row), ...per(row, f)],
+        };
+      }),
       { style: 'total', cells: ['Everything', ...t.columns.map((c) => cellFullLive(c.total)), cellFullLive(everything), ...per(everything)] },
     ],
     unclassified: t.unclassified,
@@ -168,12 +204,12 @@ export function simpleCategoryTable(blocks, drills, { categories = null, contact
     columns: [
       { label: 'By category', align: 'left', role: 'label' },
       { label: 'Full time', align: 'right' },
-      { label: 'Live time', align: 'right' },
+      { label: 'Live time', sub: 'contact rows: contact time', align: 'right' },
       { label: 'Live %', align: 'right' },
     ],
     rows: rows.map((row) => ({
-      style: row.emphasis ? 'emph' : row.kind === 'matchup' ? 'matchup' : 'normal',
-      cells: [row.label, ...line(row)],
+      style: rowStyle(row),
+      cells: [rowLabel(row), ...line(row)],
     })),
     unclassified: r.unclassified,
     noDefence: r.noDefence,
@@ -306,7 +342,7 @@ export function buildReportDoc({
   const totals = hist.aggregate(rangeBlocks);
   const bands = hist.reportRowsFor(rangeBlocks, drills, { categories, contactRows });
   const bandRow = (key) => bands.rows.find((r) => r.key === key) || { minutes: 0, timedRuns: 0 };
-  const c5 = bandRow('band:contact5');
+  const c5 = bandRow('band:c5Live');
   const whole = bandRow('band:whole');
   const n = inRange.length;
 
@@ -334,12 +370,15 @@ export function buildReportDoc({
         : 'second stopwatch not used' },
     // Kept short on purpose: five tiles across a landscape page leave room
     // for one line, and a note that runs off the tile reads as a mistake.
-    { label: 'Contact', value: whole.minutes ? fmtMinutes(whole.minutes) : '—',
-      note: !whole.minutes ? 'none in these dates'
-        : `${Math.round((whole.minutes / totals.minutes) * 100)}% of court time` },
-    { label: '5on5 live', value: c5.minutes ? fmtMinutes(c5.minutes) : '—',
+    // Contact time is the second stopwatch on the contact drills.
+    { label: 'Contact', value: whole.timedRuns ? fmtMinutes(whole.liveMinutes) : '—',
+      note: !whole.minutes ? 'no contact drills'
+        : !whole.timedRuns ? `not timed · ${fmtMinutes(whole.minutes)} drills`
+          : `live part of ${fmtMinutes(whole.minutes)}${whole.liveCoverage < 0.999 ? ' *' : ''}` },
+    { label: '5on5 live', value: c5.timedRuns ? fmtMinutes(c5.liveMinutes) : '—',
       note: !c5.minutes ? 'none in these dates'
-        : c5.timedRuns ? `${fmtMinutes(c5.liveMinutes)} live · ${fmtDensity(c5.liveDensity)}` : 'not timed' },
+        : !c5.timedRuns ? `not timed · ${fmtMinutes(c5.minutes)} drills`
+          : `live part of ${fmtMinutes(c5.minutes)}${c5.liveCoverage < 0.999 ? ' *' : ''}` },
   ];
 
   const doc = {
@@ -417,14 +456,12 @@ export function buildReportDoc({
   /* ---- footnotes: what someone who never saw the screen needs to know ---- */
   const text = JSON.stringify(doc.sections);
   doc.footnotes.push('Full time is the drill stopwatch. Live time is the second stopwatch, where it was run; live % is live time over the time that was timed.');
-  if (text.indexOf(' *') !== -1) {
-    doc.footnotes.push('* This live figure covers only the drills that were timed. Untimed work is not 0% live — it was not measured.');
+  if (text.indexOf(' *') !== -1 || JSON.stringify(tiles).indexOf(' *') !== -1) {
+    doc.footnotes.push('* This live or contact figure covers only the drills that were timed. Untimed work is not 0% live and not zero contact — it was not measured.');
   }
-  if (include.categories) {
-    doc.footnotes.push('The contact rows are a second cut of the same drills, not a further breakdown: a contested transition drill is counted once under its category and once under Transition w/contact. “Whole contact” is the four contact rows added together.');
-  }
+  if (whole.minutes || include.categories) doc.footnotes.push(...CONTACT_EXPLAINED);
   if (bands.noDefence.runs) {
-    doc.footnotes.push(`${plural(bands.noDefence.runs, 'drill run')} (${fmtMinutes(bands.noDefence.minutes)}) are in a contact category but were recorded with no live defence, so they are not in the contact rows.`);
+    doc.footnotes.push(`${plural(bands.noDefence.runs, 'drill run')} (${fmtMinutes(bands.noDefence.minutes)}) are shell or transition drills recorded with no live defence, so they are not in the contact rows.`);
   }
   if (bands.unclassified.runs) {
     doc.footnotes.push(`${plural(bands.unclassified.runs, 'drill run')} (${fmtMinutes(bands.unclassified.minutes)}) are missing from the contact rows: the app cannot tell which category they belong to.`);

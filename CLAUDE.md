@@ -1093,6 +1093,83 @@ keeping its practice-count tile. Sample PDFs were rendered and read page by
 page — that is what caught the Contact tile's note running off the edge once
 there were five tiles across the page.
 
+## What the coach asked for after five weeks (2026-09-22)
+
+Four items. Agreed order: **(1) categories and contact, (2) Analysis.**
+
+### Removing a category, starter ones included
+
+He saw two near-identical options when filing a drill — the app's starter
+`Advantage games (transition)` beside his own `Advantage games - transition`
+— and asked for the first to go, and for `Transition` to go as well. Starter
+categories could not be removed at all; only ones he had added could.
+
+Now every category offered in the drill editor is listed in Settings with
+**Rename…** and **Remove…**, including starter ones nothing is filed under.
+Removing one that still carries drills asks where to move them (the app never
+guesses) and moves the recorded runs too unless he unticks it — the same
+merge a rename onto an existing name does. Removed starter names go in the
+`hiddenCategories` meta key; a category a drill is still filed under is always
+offered, or opening that drill would silently re-file it.
+
+**A merge keeps the destination's contact setting.** Before, renaming
+Transition into his advantage category copied Transition's contact setting
+over the destination's. Folding one category into another must not change
+what the one being kept counts as.
+
+His real category names were never hard-coded: which duplicate is his is a
+fact about his tablet, so he does the removing, in two taps each.
+
+### Contact: a tree, and contact time is the second stopwatch
+
+His second pass on contact, "just to make it sure", turned four flat rows into
+three formats with parts:
+
+    5on5 contact          Live · Continuous (5on5on5) · Shell
+    Small-sided contact   Live · Continuous (3on3on3, 4on4on4) · Shell
+    Transition contact
+    Whole contact         all of them
+
+(His tree left Continuous out of small-sided; his examples put 3on3on3 and
+4on4on4 there, so it is in.) Each category is given a **role** in Settings,
+not a row: `live5` and `liveSmall` always count and the category says the
+size; `continuous` always counts and the matchup says the size; `shell` and
+`transition` count **only with live defence**. A 1on1 closeout filed under
+Defense with live defence is a small-sided shell. What Settings saved before
+the tree (`contact5`, `bySize`, …) is translated when read, never rewritten.
+
+**Contact time = live time on the second stopwatch.** "Only the portion of a
+drill where there is actual live/contact play should be counted" — a 5v5 shell
+that starts as a walk-through counts only once it goes live. The second
+stopwatch already measures exactly that, so nothing new is entered courtside;
+on a shell drill he starts the second watch when it goes live. Chosen over
+counting whole drill time (which includes every whistle and free throw) and
+over a third number typed at Stop. A contact drill he did not time is
+**not timed** — never zero, never its full length. Tenth place that rule
+appears.
+
+Contact cells lead with contact time and put the drill time under it
+("12:00 contact / of 20:00"). The PDF Contact and 5on5 live tiles are contact
+time too. A part nobody ran in is left out of the table; its format row
+always stays, so "no transition contact this week" is still said — the sample
+PDFs showed ten rows of dashes pushing the real rows onto the next page.
+
+**The PDF explains contact in plain words** (`CONTACT_EXPLAINED` in
+`report-doc.js`), because it goes to people who never saw the app. With that
+and the longer table a weekly sample report is three pages, not two; the test
+allows three and says a fourth means a layout fault. Notes now flow across a
+page break instead of jumping whole to a page of their own.
+
+**Verified:** five deliberate breaks each failed the suite — contact tile on
+full drill time, shell/transition ignoring live defence, a merge overwriting
+the destination's contact setting, 4on4on4 counted as 5on5, and a removed
+starter category still offered. Sample PDFs were rendered and read. The screens
+were **not** looked at in a real browser (no Chromium on this Mac); check the
+Reports contact rows and the Settings category list on the tablet.
+
+A views test that failed only Monday to Wednesday (its practice was dated three
+days back, which is last week on those days) now dates its own practice today.
+
 ## Hosting
 
 Served by GitHub Pages from `main` / root:

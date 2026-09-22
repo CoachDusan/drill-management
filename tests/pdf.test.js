@@ -125,7 +125,10 @@ if (weekly) {
   ok('the title is on the page', weekly.out.indexOf('(Weekly report)') !== -1);
   ok('the club name is on the page', weekly.out.indexOf('(Sample Basketball Club)') !== -1);
   ok('the season and phase are on the page', weekly.out.indexOf('2025/2026 · Inseason') !== -1 || weekly.out.indexOf('2025/2026 \\267 Inseason') !== -1);
-  ok('a weekly report fits on one or two pages', weekly.pages <= 2, String(weekly.pages));
+  // Three since 2026-09-22: the contact tree has more rows, and he asked for
+  // how contact is counted to be written out in the PDF. A fourth page would
+  // mean something is laid out badly — check the samples.
+  ok('a weekly report fits on three pages', weekly.pages <= 3, String(weekly.pages));
 }
 
 const weeklyEach = render('weekly-each-practice', { period: 'week', unit: 'day', range: week, sessions, breakdown: true });

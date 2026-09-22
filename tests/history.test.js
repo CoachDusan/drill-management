@@ -440,26 +440,39 @@ const blk = (sessionId, intensity, minutes, extra = {}) => ({
   eq('each column knows where it sat in the game week',
      table.columns.map((c) => c.gameDays.join()).join(' | '), 'GD-3 | GD-1');
 
-  const rowOf = (label) => table.rows.findIndex((r) => r.label === label);
+  const rowOf = (label) => table.rows.findIndex((r) => r.label === label || r.key === label);
   const cellOf = (label, col) => table.columns[col].cells[rowOf(label)];
 
   eq('Defense on the first day', cellOf('Defense', 0).minutes, 15);
   eq('Defense is absent on the second, not zeroed', cellOf('Defense', 1), null);
   eq('Transition on the second day', cellOf('Transition', 1).minutes, 8);
 
-  /* THE CONTACT ROWS COME FROM THE CATEGORY (his spec, 2026-09-20), with the
-     grid used only where he asked for it: the old single "Live / scrimmage"
-     category splits by how many are a side, and the Defense drills are
-     counted only when there is live play inside them. */
-  eq('small-sided contact is the 1v1 only', cellOf('Small sided contact', 0).minutes, 15);
-  eq('the 5on5 row is the scrimmage, not the defensive drill',
-     cellOf('Contact 5on5', 0).minutes, 25);
-  eq('the defensive drill has its own row', cellOf('Shell drill w/contact', 0).minutes, 15);
-  eq('and transition has its own', cellOf('Transition w/contact', 1).minutes, 8);
+  /* THE CONTACT ROWS COME FROM THE CATEGORY (his spec, 2026-09-20, made a
+     tree 2026-09-22): 5on5 contact and small-sided contact, each with Live /
+     Continuous / Shell inside, then Transition contact. The old single
+     "Live / scrimmage" category splits by how many are a side, and a Defense
+     drill counts only when there is live play inside it. */
+  eq('every category comes first, then only the contact rows',
+     table.rows.findIndex((r) => r.kind === 'matchup'),
+     table.rows.filter((r) => r.kind === 'category').length);
+  eq('his three formats, in his order, with the parts that have anything in them',
+     table.rows.filter((r) => r.kind === 'matchup').map((r) => r.key.slice(5)).join(),
+     'contact5,c5Cont,c5Shell,contactSmall,smCont,transition,whole');
+  {
+    const empty = reportRowsFor([], drills).rows.map((r) => r.key.slice(5)).join();
+    eq('with nothing run, the three formats are still there and no part is',
+       empty, 'contact5,contactSmall,transition,whole');
+  }
+  eq('small-sided contact is the 1v1 only', cellOf('band:contactSmall', 0).minutes, 15);
+  eq('the 5on5 scrimmage from the old live category is 5on5 continuous-or-live work',
+     cellOf('band:c5Cont', 0).minutes, 25);
+  eq('the 5on5 defensive drill with live play is a 5on5 shell', cellOf('band:c5Shell', 0).minutes, 15);
+  eq('and 5on5 contact is its parts added', cellOf('band:contact5', 0).minutes, 40);
+  eq('transition has its own', cellOf('band:transition', 1).minutes, 8);
 
-  // "Whole contact" is the two rows ADDED, and the unopposed shooting is not
-  // in it — the whole point of the row.
-  eq('whole contact adds every contact row', cellOf('Whole contact', 0).minutes, 55);
+  // "Whole contact" is the rows ADDED, and the unopposed shooting is not in
+  // it — the whole point of the row. The format totals are not added twice.
+  eq('whole contact adds every contact part', cellOf('Whole contact', 0).minutes, 55);
   /* The category rows and the contact rows are two different cuts of the same
      runs, not a hierarchy. The contested transition drill is counted under
      Transition AND inside Whole contact; the unopposed shooting is in neither
@@ -472,13 +485,19 @@ const blk = (sessionId, intensity, minutes, extra = {}) => ({
      table.columns[1].total.minutes);
   eq('while the day total still counts the shooting', table.columns[1].total.minutes, 38);
 
-  // Live time: pooled over the timed drills, never an average of percentages.
+  /* CONTACT TIME IS THE SECOND STOPWATCH (2026-09-22): only the live part of
+     a drill is contact. Pooled over the timed drills, never an average of
+     percentages, and an untimed contact drill adds nothing — it is "not
+     timed", not zero contact and not its full length. */
   const wholeD1 = cellOf('Whole contact', 0);
-  eq('whole contact live minutes', wholeD1.liveMinutes, 20);
+  eq('whole contact time is the live minutes', wholeD1.liveMinutes, 20);
   eq('live density is pooled over the timed drills only',
      Math.round(wholeD1.liveDensity * 1000) / 1000, 0.5);
   eq('and coverage says how much of the row that was',
      Math.round(wholeD1.liveCoverage * 1000) / 1000, Math.round((40 / 55) * 1000) / 1000);
+  const shellD1 = cellOf('band:c5Shell', 0);
+  eq('an untimed shell drill has no contact time', shellD1.liveMinutes, 0);
+  eq('and says it was not timed, rather than claiming zero', shellD1.timedRuns, 0);
 
   const shooting = cellOf('Shooting', 1);
   eq('an untimed row reports no live minutes rather than zero', shooting.liveMinutes, 0);
@@ -531,29 +550,47 @@ const blk = (sessionId, intensity, minutes, extra = {}) => ({
     { id: 'dSml', category: 'Small-sided live', situation: 3, contact: true },
     { id: 'c5',   category: 'Continuous games', situation: 1, contact: true },  // 5on5on5
     { id: 'c4',   category: 'Continuous games', situation: 2, contact: true },  // 4on4on4
+    { id: 'c3',   category: 'Continuous games', situation: 3, contact: true },  // 3on3on3
     { id: 'shell',category: 'Defense',          situation: 2, contact: true },
+    { id: 'shell5',category: 'Defense',         situation: 1, contact: true },
+    { id: 'close',category: 'Defense',          situation: 5, contact: true },  // 1on1 closeout
     { id: 'walk', category: 'Defense',          situation: 2, contact: false },
     { id: 'tr',   category: 'Transition',       situation: 3, contact: true },
+    { id: 'tr0',  category: 'Transition',       situation: 3, contact: false },
+    { id: 'd5x',  category: '5on5 live',        situation: 1, contact: false },
   ];
   const lib = new Map(drills.map((d) => [d.id, d]));
   const runOf = (d) => ({ drillId: d.id, category: d.category, situation: d.situation, contact: d.contact });
   const rowFor = (id, map = null) => contactRowOf(runOf(drills.find((d) => d.id === id)), lib, map);
 
   eq('a 6on6 warm-up entered as 5v5 is not contact at all', rowFor('w6'), null);
-  eq('5on5 live is whole-squad contact', rowFor('d5'), 'contact5');
-  eq('small-sided live is small-sided contact', rowFor('dSml'), 'contactSmall');
-  eq('5on5on5 counts with the 5on5 contact', rowFor('c5'), 'contact5');
-  eq('4on4on4 counts with the small-sided contact', rowFor('c4'), 'contactSmall');
-  eq('a defence drill with live play inside is a shell drill', rowFor('shell'), 'shell');
+  eq('5on5 live is 5on5 contact, live', rowFor('d5'), 'c5Live');
+  eq('small-sided live is small-sided contact, live', rowFor('dSml'), 'smLive');
+  eq('5on5on5 is 5on5 contact, continuous', rowFor('c5'), 'c5Cont');
+  eq('4on4on4 is small-sided contact, continuous', rowFor('c4'), 'smCont');
+  eq('3on3on3 is small-sided contact, continuous', rowFor('c3'), 'smCont');
+  eq('a 4on4 defence drill that goes live is a small-sided shell', rowFor('shell'), 'smShell');
+  eq('a 5on5 shell drill that goes live is a 5on5 shell', rowFor('shell5'), 'c5Shell');
+  eq('a 1on1 closeout drill is a small-sided shell', rowFor('close'), 'smShell');
   eq('a defence drill with nobody defending is not contact', rowFor('walk'), 'noDefence');
-  eq('transition is its own contact row', rowFor('tr'), 'transition');
+  eq('transition with live play is transition contact', rowFor('tr'), 'transition');
+  eq('transition with nobody defending is not', rowFor('tr0'), 'noDefence');
+  // "Always counted as contact" — the category alone decides these.
+  eq('a 5on5 live drill counts whatever its defence flag says', rowFor('d5x'), 'c5Live');
 
   // His vocabulary, so the mapping is his too — Settings can move a category
   // in or out, and the defaults are only a first guess from the name.
   eq('a category he marks as not contact drops out',
      rowFor('tr', { Transition: null }), null);
   eq('and one he adds is counted',
-     rowFor('w6', { 'Warm-up': 'contactSmall' }), 'contactSmall');
+     rowFor('w6', { 'Warm-up': 'liveSmall' }), 'smLive');
+  // What Settings saved before the tree is read, not rewritten.
+  eq('an old saved "Contact 5on5" setting reads as 5on5 live',
+     rowFor('w6', { 'Warm-up': 'contact5' }), 'c5Live');
+  eq('an old "by size" setting reads as continuous',
+     rowFor('w6', { 'Warm-up': 'bySize' }), 'c5Cont');
+  eq('an old "shell" setting still needs live play',
+     rowFor('walk', { Defense: 'shell' }), 'noDefence');
 
   // A run whose drill was never set up has no category of its own. Calling it
   // "not contact" would quietly shrink the contact totals.

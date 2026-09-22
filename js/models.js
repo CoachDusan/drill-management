@@ -172,36 +172,78 @@ export function situationOption(situation, contact) {
  * matchup dial, and it was being counted as whole-squad contact. It is a
  * warm-up. Nobody is competing in it.
  *
- * So contact now comes from the CATEGORY — his own vocabulary, the thing that
- * says what a drill is FOR — with the grid used only where he asked for it:
+ * So contact comes from the CATEGORY — his own vocabulary, the thing that
+ * says what a drill is FOR — with the grid used only where he asked for it.
  *
- *   5on5 live                  -> Contact 5on5
- *   Continuous games           -> by how many a side: 5on5on5 is whole-squad
- *                                 contact, 4on4on4 is small-sided
- *   Small-sided live           -> Small sided contact
- *   Defense                    -> Shell drill w/contact, but ONLY the drills
- *                                 with live play inside. "Not all of them but
- *                                 some of them" — his words, and the live
- *                                 defence flag is what separates them.
- *   Transition / Advantage     -> Transition w/contact
+ * THE TREE (2026-09-22). His second pass, "just to make it sure", turned four
+ * flat rows into three formats with parts inside them:
+ *
+ *   5on5 contact          Live        every drill in 5on5 live
+ *                         Continuous  5on5on5
+ *                         Shell       a 5on5 shell drill that goes live
+ *   Small-sided contact   Live        every drill in small-sided live
+ *                         Continuous  3on3on3, 4on4on4
+ *                         Shell       1on1 closeouts, a 4on4 shell that goes live
+ *   Transition contact                advantage games with live play
+ *
+ * So a category is given a ROLE, and the role plus the drill's own matchup
+ * decides the row:
+ *
+ *   live5 / liveSmall   always contact, and the category says which size.
+ *   continuous          always contact; how many a side says which size.
+ *   shell               contact ONLY with live defence ("not all drills from
+ *                       category defense but only those with the contact");
+ *                       5v5 is whole-squad, fewer a side is small-sided.
+ *   transition          contact ONLY with live defence.
  *
  * Everything else — warm-ups, shooting, 5v0 pattern work, conditioning — is
  * not contact, whatever the matchup says. The 6on6 warm-up drops out the
  * moment it is filed as a warm-up, with nothing new to enter.
  *
+ * CONTACT TIME IS THE SECOND STOPWATCH. "Only the portion of a drill where
+ * there is actual live/contact play should be counted" — a shell drill that
+ * starts as a walk-through and ends 5on5 live counts only its live part. That
+ * part is exactly what the second stopwatch already measures, so nothing new
+ * is entered courtside. A contact drill he did not time has no contact time:
+ * it is "not timed", never 0 and never its full length. Chosen 2026-09-22 over
+ * counting full drill time (which would include every whistle and free throw)
+ * and over a third number typed at Stop.
+ *
  * The mapping is editable in Settings, because the categories are his and he
  * renames them. These are only the defaults, matched on the name.
  */
 export const CONTACT_ROWS = [
-  { key: 'contact5',     label: 'Contact 5on5',          note: 'Whole squad contested — 5on5 live, and 5on5on5' },
-  { key: 'contactSmall', label: 'Small sided contact',   note: 'Contested with fewer players — 1on1 to 4on4, and 4on4on4' },
-  { key: 'shell',        label: 'Shell drill w/contact', note: 'Defence drills with live play inside' },
-  { key: 'transition',   label: 'Transition w/contact',  note: 'Transition and advantage games' },
+  { key: 'c5Live',     group: 'contact5',     part: 'Live',       label: '5on5 contact · Live',              note: 'Every drill in 5on5 live' },
+  { key: 'c5Cont',     group: 'contact5',     part: 'Continuous', label: '5on5 contact · Continuous',        note: '5on5on5' },
+  { key: 'c5Shell',    group: 'contact5',     part: 'Shell',      label: '5on5 contact · Shell',             note: '5on5 shell drills, the live part' },
+  { key: 'smLive',     group: 'contactSmall', part: 'Live',       label: 'Small-sided contact · Live',       note: 'Every drill in small-sided live' },
+  { key: 'smCont',     group: 'contactSmall', part: 'Continuous', label: 'Small-sided contact · Continuous', note: '3on3on3, 4on4on4' },
+  { key: 'smShell',    group: 'contactSmall', part: 'Shell',      label: 'Small-sided contact · Shell',      note: '1on1 closeouts, 4on4 shell — the live part' },
+  { key: 'transition', group: 'transition',   part: null,         label: 'Transition contact',               note: 'Advantage games with live play' },
 ];
 
-/** A category whose drills split between the two contact sizes by how many
- *  players are a side. Continuous games holds both 5on5on5 and 4on4on4. */
-export const BY_SIZE = 'bySize';
+/** The three formats, in his order. A format with one part has no sub-rows. */
+export const CONTACT_GROUPS = [
+  { key: 'contact5',     label: '5on5 contact' },
+  { key: 'contactSmall', label: 'Small-sided contact' },
+  { key: 'transition',   label: 'Transition contact' },
+];
+
+/** What a category can be set to in Settings. */
+export const CONTACT_ROLES = [
+  { value: 'live5',      label: '5on5 contact · Live — always contact' },
+  { value: 'liveSmall',  label: 'Small-sided contact · Live — always contact' },
+  { value: 'continuous', label: 'Continuous — always contact (5on5on5 → 5on5, 3on3on3 / 4on4on4 → small-sided)' },
+  { value: 'shell',      label: 'Shell — only with live defence (5v5 → 5on5, fewer → small-sided)' },
+  { value: 'transition', label: 'Transition contact — only with live defence' },
+];
+
+/* What Settings stored before the tree. Read, never rewritten: the tablet is
+   carrying real data and a translated read needs no migration. */
+const LEGACY_ROLE = {
+  contact5: 'live5', contactSmall: 'liveSmall', bySize: 'continuous',
+  shell: 'shell', transition: 'transition',
+};
 
 export function contactRowInfo(key) {
   return CONTACT_ROWS.find((r) => r.key === key) || null;
@@ -211,24 +253,27 @@ function normCategory(name) {
   return String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-/** The contact row a category falls in by default, before he changes it in
- *  Settings. Null means the category is not contact at all. */
+/** The role a category has by default, before he changes it in Settings.
+ *  Null means the category is not contact at all. */
 export function defaultContactRow(category) {
   const n = normCategory(category);
   if (!n) return null;
-  if (/5on5live|5v5live|livescrimmage5on5/.test(n)) return 'contact5';
-  if (/continuous/.test(n)) return BY_SIZE;
-  if (/smallside/.test(n)) return 'contactSmall';
-  if (/^livescrimmage$/.test(n)) return BY_SIZE;      // the old single category
+  if (/5on5live|5v5live|livescrimmage5on5/.test(n)) return 'live5';
+  if (/continuous/.test(n)) return 'continuous';
+  if (/smallside/.test(n)) return 'liveSmall';
+  if (/^livescrimmage$/.test(n)) return 'continuous';  // the old single category: split by size
   if (/^defen[cs]e/.test(n)) return 'shell';
   if (/transition|advantage/.test(n)) return 'transition';
   return null;
 }
 
-/** What Settings holds: category -> row key, BY_SIZE, or null for "not
- *  contact". A category he has never touched falls back to the default. */
+/** What Settings holds: category -> role, or null for "not contact". A
+ *  category he has never touched falls back to the default. */
 export function contactRowForCategory(category, map = null) {
-  if (map && Object.prototype.hasOwnProperty.call(map, category)) return map[category] || null;
+  if (map && Object.prototype.hasOwnProperty.call(map, category)) {
+    const v = map[category];
+    return v ? (LEGACY_ROLE[v] || (CONTACT_ROLES.some((r) => r.value === v) ? v : null)) : null;
+  }
   return defaultContactRow(category);
 }
 
@@ -489,6 +534,20 @@ export const DEFAULT_CATEGORIES = [
   'Strength / power',
   'Cool-down / recovery',
 ];
+
+/** Every category offered when filing a drill: the starter set minus any he
+ *  removed, the ones he added, and any a drill is still filed under. A
+ *  category still carrying a drill is always offered, even if removed —
+ *  otherwise opening that drill would silently re-file it. */
+export function offeredCategories(drills = [], custom = [], hidden = []) {
+  const gone = new Set(hidden);
+  const used = drills.filter((d) => !d.archived).map((d) => d.category);
+  return [...new Set([
+    ...DEFAULT_CATEGORIES.filter((c) => !gone.has(c)),
+    ...custom,
+    ...used,
+  ])].filter(Boolean);
+}
 
 /* ---- splitting "Live / scrimmage" -----------------------------------
  *

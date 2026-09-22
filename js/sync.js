@@ -151,13 +151,39 @@ export async function renameCategory(from, to, { runsToo = true } = {}) {
   if (custom.includes(from)) {
     await db.setMeta('customCategories', [...new Set(custom.map((c) => (c === from ? to : c)))]);
   }
+  // On a merge the category being merged INTO keeps its own contact setting:
+  // folding Transition into his advantage category must not change what the
+  // advantage category counts as.
   const map = await db.getMeta('contactRows', null);
   if (map && Object.prototype.hasOwnProperty.call(map, from)) {
-    const next = { ...map, [to]: map[from] };
+    const next = { ...map };
+    if (!Object.prototype.hasOwnProperty.call(map, to)) next[to] = map[from];
     delete next[from];
     await db.setMeta('contactRows', next);
   }
   return { drills: movedDrills, runs: movedRuns };
+}
+
+/* ---- removing a category --------------------------------------------------
+ *
+ * "There are two of the same option — the first one should be deleted", and
+ * "Transition should be deleted as well" (2026-09-22). The starter
+ * categories could not be removed at all, so the one the app shipped with
+ * sat beside the one he had written himself.
+ *
+ * A category with nothing filed under it simply leaves the list. One that
+ * still carries drills has to go somewhere, and only he knows where — so the
+ * screen asks, and the drills (and, if he ticks it, their recorded runs) are
+ * moved first, exactly as a rename onto an existing name merges the two.
+ */
+export async function removeCategory(name, { moveTo = null, runsToo = true } = {}) {
+  let moved = { drills: 0, runs: 0 };
+  if (moveTo && moveTo !== name) moved = await renameCategory(name, moveTo, { runsToo });
+  const hidden = await db.getMeta('hiddenCategories', []);
+  if (!hidden.includes(name)) await db.setMeta('hiddenCategories', [...hidden, name]);
+  const custom = await db.getMeta('customCategories', []);
+  if (custom.includes(name)) await db.setMeta('customCategories', custom.filter((c) => c !== name));
+  return moved;
 }
 
 /* ---- repairing runs recorded before this existed -------------------------

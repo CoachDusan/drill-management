@@ -8,7 +8,7 @@
  */
 
 import {
-  buildReportDoc, sortDrillRows, reportKind, cellFullLive, drillTable, practiceSheet,
+  buildReportDoc, sortDrillRows, reportKind, cellFullLive, cellContact, drillTable, practiceSheet,
 } from '../js/report-doc.js';
 import { addDays } from '../js/models.js';
 
@@ -71,7 +71,7 @@ const week = { from: D(0), to: D(6), label: '2 – 8 Mar' };
   ok('within a band, three runs beat one run of more minutes', names.indexOf('3on3 FC') < names.indexOf('1on1 HC'));
   eq('the bands are named between the rows',
     t.rows.filter((r) => r.style === 'group').map((r) => r.cells[0]),
-    ['Contact 5on5', 'Small sided contact', 'Not contact']);
+    ['5on5 contact · Live', 'Small-sided contact · Live', 'Not contact']);
 
   /* The two he reads are picked out and come first, before the spread:
      "average full/live and live % are the most important informations". */
@@ -122,12 +122,26 @@ eq('chosen dates follow their column unit', reportKind('custom', 'week').breakdo
   eq('three practices counted', plain.tiles[0].value, '3');
   eq('the tiles are the five he reads',
     plain.tiles.map((t) => t.label), ['Practices', 'Court time', 'Live time', 'Contact', '5on5 live']);
-  // Contact is every contact row added: the 5on5 scrimmage plus all the
-  // small-sided live work. The unopposed shell drill is in neither.
-  eq('contact is every contact row added up', plain.tiles[3].value, '92:00');
-  eq('and 5on5 live is the whole-squad row on its own', plain.tiles[4].value, '20:00');
-  ok('a partly timed cell brings its footnote', plain.footnotes.some((f) => f.indexOf('* This live figure') === 0));
-  ok('and the contact-rows explanation travels with the table', plain.footnotes.some((f) => f.indexOf('The contact rows are a second cut') === 0));
+  /* Contact TIME is the second stopwatch on every contact drill (2026-09-22):
+     the 5on5 scrimmage's 12 live minutes plus the small-sided live work's 38.
+     Not the 92 minutes those drills ran for — only the live part is contact.
+     The unopposed shell drill is in neither. */
+  eq('contact is the live time of every contact drill', plain.tiles[3].value, '50:00');
+  ok('beside the drill time it was part of', plain.tiles[3].note.indexOf('92:00') !== -1, plain.tiles[3].note);
+  eq('and 5on5 live is the live part of the 5on5 live drills', plain.tiles[4].value, '12:00');
+  ok('a partly timed cell brings its footnote', plain.footnotes.some((f) => f.indexOf('* This live or contact figure') === 0));
+  ok('and how contact is counted travels with the report, in plain words',
+    plain.footnotes.some((f) => f.indexOf('How contact is counted') === 0)
+    && plain.footnotes.some((f) => f.indexOf('5on5 contact = Live') !== -1 && f.indexOf('3on3on3, 4on4on4') !== -1));
+
+  /* A contact cell leads with contact time, never with drill time — and an
+     untimed contact drill is "not timed", not zero and not its full length. */
+  const catT = plain.sections[0].blocks[0];
+  const liveRow = catT.rows.find((r) => r.cells[0].trim() === 'Live');
+  ok('a contact part is indented under its format', liveRow && liveRow.cells[0].startsWith(' '), liveRow && liveRow.cells[0]);
+  eq('a contact cell is contact time, then the drill time', cellContact({ minutes: 20, timedRuns: 1, liveMinutes: 12, liveCoverage: 1 }), '12:00\nof 20:00');
+  eq('partly timed contact is starred', cellContact({ minutes: 20, timedRuns: 1, liveMinutes: 5, liveCoverage: 0.5 }), '5:00 *\nof 20:00');
+  eq('untimed contact says so', cellContact({ minutes: 15, timedRuns: 0, liveMinutes: 0, liveCoverage: 0 }), 'not timed\nof 15:00');
 
   const each = buildReportDoc({ period: 'week', unit: 'day', range: week, sessions, blocks, drills, breakdown: true });
   const sheets = each.sections.slice(2);

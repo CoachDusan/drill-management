@@ -409,19 +409,20 @@ function tablePanel(table, perN = null) {
           h('th', { class: 'num', text: 'Total' }),
           perN ? h('th', { class: 'num', text: 'Per practice' }) : null,
         ])),
-        h('tbody', {}, table.rows.map((row, i) => h('tr', {
-          class: row.emphasis ? 'emph' : '',
-        }, [
-          h('td', {}, [
-            h('div', { class: 'name', text: row.label }),
-            row.kind === 'matchup'
-              ? h('div', { class: 'th-sub', text: matchupNote(row) })
-              : null,
-          ]),
-          ...table.columns.map((c) => cell(c.cells[i])),
-          cell(row, true),
-          perN ? cell(hist.perPractice(row, perN), true) : null,
-        ]))),
+        h('tbody', {}, table.rows.map((row, i) => {
+          const contact = row.kind === 'matchup';
+          return h('tr', {
+            class: row.emphasis ? 'emph' : row.level === 'group' ? 'contact-group' : '',
+          }, [
+            h('td', { style: row.level === 'part' ? { paddingLeft: '26px' } : null }, [
+              h('div', { class: 'name', text: row.label }),
+              contact ? h('div', { class: 'th-sub', text: matchupNote(row) }) : null,
+            ]),
+            ...table.columns.map((c) => cell(c.cells[i], false, contact)),
+            cell(row, true, contact),
+            perN ? cell(hist.perPractice(row, perN), true, contact) : null,
+          ]);
+        })),
         h('tfoot', {}, h('tr', {}, [
           h('td', { text: 'Everything' }),
           ...table.columns.map((c) => cell(c.total)),
@@ -432,14 +433,16 @@ function tablePanel(table, perN = null) {
     ]),
 
     h('p', { class: 'tiny', style: { marginTop: '8px' } },
-      'The contact rows are a second cut of the same drills, not a further breakdown: a contested transition drill is counted once under Transition and once under Transition w/contact. “Whole contact” is the four contact rows added together. Which categories count as contact is set in Settings.'),
+      'Contact rows: the top line is contact time — the second stopwatch, so only the live part of each drill — and underneath is the full drill time it was part of. A contact drill you did not time says “not timed”; it is not counted as zero. The contact rows are a second look at the same drills, not extra time: a live transition drill is counted once in its category and once in Transition contact. Which categories count as contact is set in Settings.'),
     perN ? h('p', { class: 'tiny' },
       `“Per practice” divides by all ${perN} ${gameDayFilter} practice${perN === 1 ? '' : 's'} in these dates — including the ones that did not use that row. A category you skipped on one of them counts as zero there, which is how much of it a ${gameDayFilter} really has.`) : null,
   ]);
 }
 
 function matchupNote(row) {
-  if (row.key === 'band:whole') return `${CONTACT_ROWS.length} contact rows, added`;
+  if (row.key === 'band:whole') return 'Every contact row added';
+  if (row.key === 'band:contact5') return 'Live + continuous + shell';
+  if (row.key === 'band:contactSmall') return 'Live + continuous + shell';
   const b = CONTACT_ROWS.find((x) => `band:${x.key}` === row.key);
   return b ? b.note : '';
 }
@@ -455,8 +458,25 @@ function sumOf(aggs) {
   return out;
 }
 
-function cell(agg, isTotal = false) {
-  return h('td', { class: isTotal ? 'num total-col' : 'num' }, cellText(agg));
+function cell(agg, isTotal = false, contact = false) {
+  return h('td', { class: isTotal ? 'num total-col' : 'num' }, contact ? contactText(agg) : cellText(agg));
+}
+
+/** A contact row's cell: contact time first (the second stopwatch — only the
+ *  live part counts), then the full drill time it was part of. */
+function contactText(agg) {
+  if (!agg || !agg.minutes) return h('span', { class: 'muted', text: '—' });
+  if (!agg.timedRuns) {
+    return h('div', {}, [
+      h('div', { class: 'muted', text: 'not timed' }),
+      h('div', { class: 'th-sub', text: `of ${fmtMinutes(agg.minutes)}` }),
+    ]);
+  }
+  return h('div', {}, [
+    h('div', { class: 'live-line', text: `${fmtMinutes(agg.liveMinutes)} contact` }),
+    h('div', { class: 'th-sub', text: `of ${fmtMinutes(agg.minutes)}` }),
+    agg.liveCoverage < 0.999 ? h('div', { class: 'th-sub', text: `timed on ${fmtMinutes(agg.timedMinutes)}` }) : null,
+  ]);
 }
 
 /** The two lines of one cell: total time, then live time where it exists. */
@@ -491,8 +511,8 @@ function unclassifiedNote(u) {
 function noDefenceNote(n) {
   if (!n || !n.runs) return null;
   return h('div', { class: 'note' }, [
-    h('strong', { text: `${n.runs} run${n.runs === 1 ? '' : 's'} (${fmtMinutes(n.minutes)}) in a contact category had no live defence. ` }),
-    'They are counted in their category and in the totals, but not in the contact rows — unopposed work is not contact. If one of them should be, set it to live defence in Drills.',
+    h('strong', { text: `${n.runs} shell or transition run${n.runs === 1 ? '' : 's'} (${fmtMinutes(n.minutes)}) had no live defence. ` }),
+    'They are counted in their category and in the totals, but not in the contact rows — a walk-through is not contact. If one of them went live, set the drill to live defence in Drills.',
   ]);
 }
 

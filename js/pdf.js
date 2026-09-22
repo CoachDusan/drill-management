@@ -243,7 +243,10 @@ export function renderReportPdf(model, branding = {}, JsPDF, { compress = true, 
   if (model.footnotes.length) {
     pdf.setFontSize(7.8);
     const lines = model.footnotes.map((f) => pdf.splitTextToSize(T(f), W - 2 * M - 4));
-    const need = 8 + lines.reduce((s, l) => s + l.length * 3.6 + 1.2, 0);
+    // Notes flow on from the tables. Only the heading and the first note are
+    // kept together; moving the whole block to a fresh page left a page
+    // holding nothing but notes when the contact explanation was added.
+    const need = 8 + lines[0].length * 3.6 + 1.2;
     if (y + need > H - 16) { pdf.addPage(); y = TOP + 3; }
     pdf.setFont('helvetica', 'bold');
     pdf.setFontSize(9.5);
@@ -346,7 +349,8 @@ function drawTable(pdf, block, startY, { accent, light }) {
       }
       const st = r.style === 'total' ? { fontStyle: 'bold', fillColor: [236, 236, 236] }
         : r.style === 'emph' ? { fontStyle: 'bold', fillColor: light }
-          : r.style === 'matchup' ? { fillColor: [248, 248, 248] } : {};
+          : r.style === 'matchup-group' ? { fontStyle: 'bold', fillColor: [242, 242, 242] }
+            : r.style === 'matchup' ? { fillColor: [248, 248, 248] } : {};
       // A row style wins over the column tint, so a total row still reads as
       // a total; an ordinary row keeps the emphasised column's own styling.
       return r.cells.map((cell, i) => ({

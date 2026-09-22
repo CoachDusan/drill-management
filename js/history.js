@@ -20,7 +20,7 @@
 import {
   TISSUE, toDateKey, addDays, fromDateKey, formatDate,
   GAME_DAY_ORDER, isGameWeekDay, matchupBand,
-  CONTACT_ROWS, BY_SIZE, contactRowForCategory,
+  CONTACT_ROWS, CONTACT_GROUPS, contactRowForCategory,
 } from './models.js';
 import {
   blockMinutes, blockLoad, blockTissue, blockContactMinutes,
@@ -819,16 +819,17 @@ export function blockMatchup(block, library) {
 
 /* ---- the contact rows ---------------------------------------------------
  *
- * His four rows, and they come from the CATEGORY now, not from the grid. See
- * the long note in models.js: a 6on6 warm-up entered as 5v5 with live defence
- * was landing in whole-squad contact, and it is a warm-up.
+ * His tree — 5on5 contact (live, continuous, shell), small-sided contact
+ * (live, continuous, shell), transition contact — and it comes from the
+ * CATEGORY, not from the grid. See the long note in models.js.
  *
- * Three answers besides the four rows, and each of them is reported rather
- * than folded into a total:
+ * Three answers besides the rows, and each of them is reported rather than
+ * folded into a total:
  *   null         not a contact category at all — warm-ups, shooting, 5v0.
- *   'noDefence'  in a contact category, but recorded with no live defence.
+ *   'noDefence'  a shell or transition drill recorded with no live defence.
  *   'unknown'    the run cannot be placed: a drill added courtside and never
- *                set up, or an old run whose drill has been deleted.
+ *                set up, an old run whose drill has been deleted, or a
+ *                continuous / shell drill with no matchup to size it by.
  */
 export function contactRowOf(block, library, map = null) {
   const category = categoryOfBlock(block, library);
@@ -836,32 +837,44 @@ export function contactRowOf(block, library, map = null) {
   // cannot be placed. Saying "not contact" would quietly shrink the totals.
   if (category === NOT_SET_UP || category === 'Not in the library') return 'unknown';
 
-  const assign = contactRowForCategory(category, map);
-  if (!assign) return null;
+  const role = contactRowForCategory(category, map);
+  if (!role) return null;
+  // "Always counted as contact" — the category alone decides these two.
+  if (role === 'live5') return 'c5Live';
+  if (role === 'liveSmall') return 'smLive';
 
   const d = block.drillId ? library.get(block.drillId) : null;
-  let contact = block.contact;
-  if (contact === null || contact === undefined || block.detailsPending) {
-    contact = (d && !d.unrated) ? d.contact !== false : null;
+  if (role === 'shell' || role === 'transition') {
+    let contact = block.contact;
+    if (contact === null || contact === undefined || block.detailsPending) {
+      contact = (d && !d.unrated) ? d.contact !== false : null;
+    }
+    if (contact === null) return 'unknown';
+    // "Not all drills from category defense but only those with the contact."
+    if (contact === false) return 'noDefence';
+    if (role === 'transition') return 'transition';
   }
-  if (contact === null) return 'unknown';
-  // "Not all Defense drills — only those with the contact." The same test is
-  // applied to every contact category: unopposed work is never contact.
-  if (contact === false) return 'noDefence';
 
-  if (assign !== BY_SIZE) return assign;
+  // Continuous and shell split by how many are a side: 5v5 is whole-squad.
   let s = block.situation;
   if (s === null || s === undefined) s = d ? d.situation : null;
   const n = Number(s);
   if (!Number.isFinite(n) || n < 1 || n > 5) return 'unknown';
-  return n === 1 ? 'contact5' : 'contactSmall';
+  const big = n === 1;
+  if (role === 'continuous') return big ? 'c5Cont' : 'smCont';
+  return big ? 'c5Shell' : 'smShell';
 }
 
 /**
  * Every row of his weekly table, in his order, built from one pass over the
- * runs. Categories are his own vocabulary; the contact rows come out of the
- * grid; "Whole contact" is the two contact rows added, not a third bucket the
- * runs are sorted into — a drill belongs to exactly one of them.
+ * runs: every category first, then only the contact rows. A contact format
+ * with parts gets a total row followed by the parts that have anything in them; "Whole contact" is every
+ * part added, not another bucket the runs are sorted into — a drill belongs
+ * to exactly one part.
+ *
+ * In the contact rows the number that matters is the LIVE time: that is the
+ * contact time. The full drill time travels beside it so he can see how much
+ * of a drill the contact was.
  */
 export function reportRowsFor(blocks, drills = [], { categories = null, contactRows = null } = {}) {
   const library = new Map(drills.map((d) => [d.id, d]));
@@ -890,17 +903,27 @@ export function reportRowsFor(blocks, drills = [], { categories = null, contactR
     ...aggregate(byCategory.get(c)),
   }));
 
-  for (const row of CONTACT_ROWS) {
-    const list = byBand.get(row.key) || [];
-    rows.push({
-      key: `band:${row.key}`, kind: 'matchup', label: row.label, blocks: list,
-      ...aggregate(list),
-    });
+  for (const g of CONTACT_GROUPS) {
+    const parts = CONTACT_ROWS.filter((r) => r.group === g.key);
+    const all = parts.flatMap((r) => byBand.get(r.key) || []);
+    if (parts.length === 1) {
+      rows.push({ key: `band:${parts[0].key}`, kind: 'matchup', level: 'group', label: g.label, blocks: all, ...aggregate(all) });
+      continue;
+    }
+    rows.push({ key: `band:${g.key}`, kind: 'matchup', level: 'group', label: g.label, blocks: all, ...aggregate(all) });
+    for (const r of parts) {
+      const list = byBand.get(r.key) || [];
+      // A part nothing ran in is left out; its format row always stays, so
+      // "no transition contact this week" is still said. Ten rows of dashes
+      // pushed the real ones off the page (seen in the sample PDFs).
+      if (!list.length) continue;
+      rows.push({ key: `band:${r.key}`, kind: 'matchup', level: 'part', label: r.part, fullLabel: r.label, blocks: list, ...aggregate(list) });
+    }
   }
 
   const whole = CONTACT_ROWS.flatMap((r) => byBand.get(r.key) || []);
   rows.push({
-    key: 'band:whole', kind: 'matchup', label: 'Whole contact', emphasis: true, blocks: whole,
+    key: 'band:whole', kind: 'matchup', level: 'whole', label: 'Whole contact', emphasis: true, blocks: whole,
     ...aggregate(whole),
   });
 
@@ -911,9 +934,8 @@ export function reportRowsFor(blocks, drills = [], { categories = null, contactR
     // Never silently folded into a contact total. Reported so he knows the
     // contact rows are short, rather than believing them.
     unclassified: { runs: unknown.length, ...aggregate(unknown) },
-    // A drill filed in a contact category but recorded with no live defence.
-    // He said "all Transition drills are contact"; if one of them is set to
-    // no defence it is left out, and that is worth saying rather than hiding.
+    // A shell or transition drill recorded with no live defence. Left out, and
+    // that is worth saying rather than hiding.
     noDefence: { runs: noDefence.length, ...aggregate(noDefence) },
   };
 }

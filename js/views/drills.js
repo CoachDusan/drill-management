@@ -8,7 +8,7 @@
 import * as db from '../db.js';
 import { followLibrary, staleRuns, relabelRuns } from '../sync.js';
 import {
-  makeDrill, DEFAULT_CATEGORIES, intensityInfo,
+  makeDrill, offeredCategories, intensityInfo,
   INTENSITY_MODES, resolveIntensity, hasTissueTags, TISSUE, TISSUE_LEVELS,
 } from '../models.js';
 import { h, mount, toast, openModal, confirmDanger, field, textInput, numberInput, selectInput, emptyState } from '../ui.js';
@@ -152,9 +152,10 @@ function tissueSummary(d) {
 }
 
 async function categoryList(drills) {
-  const custom = await db.getMeta('customCategories', []);
-  const used = [...new Set(drills.map((d) => d.category))];
-  return [...new Set([...DEFAULT_CATEGORIES, ...custom, ...used])].filter(Boolean);
+  const [custom, hidden] = await Promise.all([
+    db.getMeta('customCategories', []), db.getMeta('hiddenCategories', []),
+  ]);
+  return offeredCategories(drills, custom, hidden);
 }
 
 /* ---- add / edit ------------------------------------------------------- */

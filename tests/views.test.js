@@ -964,9 +964,11 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
 
   contains('the reports screen renders', root, 'Reports');
   contains('his own category rows are there', root, 'Defense');
-  contains('and the contact rows the categories cannot produce', root, 'Contact 5on5');
-  contains('including the small-sided one', root, 'Small sided contact');
-  contains('and the two of them added up', root, 'Whole contact');
+  contains('and the contact formats the categories cannot produce', root, '5on5 contact');
+  contains('including the small-sided one', root, 'Small-sided contact');
+  contains('and transition', root, 'Transition contact');
+  contains('and all of them added up', root, 'Whole contact');
+  contains('contact cells lead with contact time', root, ' contact');
 
   // The sentence he actually asked for: minutes of live game, not only a share.
   contains('cells carry live time in minutes', root, '15:00 live');
@@ -1037,8 +1039,8 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
   rows = hist.reportRowsFor([after], [setUp]);
   ok('the report counts it as Defense', rows.rows.some((r) => r.label === 'Defense' && r.runs === 1));
   // Filed under Defense with live play inside, so it is a shell drill with
-  // contact — his own row, not whole-squad contact.
-  ok('and in the shell-drill contact row', rows.rows.some((r) => r.key === 'band:shell' && r.runs === 1));
+  // contact — 5v5, so the 5on5 shell, not 5on5 live.
+  ok('and in the 5on5 shell contact row', rows.rows.some((r) => r.key === 'band:c5Shell' && r.runs === 1));
 
   // From here on it is an ordinary snapshot: re-filing the drill in March
   // must not rewrite what this practice was.
@@ -1200,6 +1202,17 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
  * Every keystroke used to re-render the whole screen, which destroyed the
  * input: the keyboard closed and the page jumped to the top. */
 {
+  // A practice dated TODAY, so this week's report has a drill list to search.
+  // The fixture before it is dated three days back, which is last week on a
+  // Monday to Wednesday — the test used to fail on those days only.
+  const today = makeSession({ date: TODAY, status: 'complete', endedAt: new Date().toISOString() });
+  const d = makeDrill({ name: 'Search fixture', category: 'Shooting', unrated: false });
+  await db.put(db.STORES.sessions, today);
+  await db.put(db.STORES.drills, d);
+  await db.put(db.STORES.blocks, makeBlock({
+    sessionId: today.id, drillId: d.id, drillName: d.name, category: 'Shooting',
+    intensity: 3, elapsedMs: 5 * 60000, endedAt: new Date().toISOString(),
+  }));
   root = newRoot();
   await reports.render(root);
   await flush();
@@ -1214,6 +1227,60 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
     contains('but the list under it does filter', root, 'No drill matches that.');
   }
   reports.teardown();
+}
+
+/* ---- 2026-09-22: removing a category ----
+ * "There are two of the same option — the first should be deleted", and
+ * "Transition should be deleted as well". Starter categories could not be
+ * removed at all. */
+{
+  const { removeCategory } = await import('../js/sync.js');
+  const hist = await import('../js/history.js');
+  const { offeredCategories } = await import('../js/models.js');
+  const before = await db.exportAll();   // put back afterwards: later tests build on it
+  await db.clearAll();
+  const ses = makeSession({ date: TODAY, status: 'complete', endedAt: new Date().toISOString() });
+  const mine = makeDrill({ name: '3on2', category: 'Advantage games - transition', situation: 3, contact: true, unrated: false });
+  const old = makeDrill({ name: '2on1', category: 'Transition', situation: 4, contact: true, unrated: false });
+  await db.put(db.STORES.sessions, ses);
+  await db.putMany(db.STORES.drills, [mine, old]);
+  await db.put(db.STORES.blocks, makeBlock({
+    sessionId: ses.id, drillId: old.id, drillName: old.name, category: 'Transition',
+    situation: 4, contact: true, intensity: 6, elapsedMs: 8 * 60000, endedAt: new Date().toISOString(),
+  }));
+  await db.setMeta('customCategories', ['Advantage games - transition']);
+  // He had set his own category to count as transition contact.
+  await db.setMeta('contactRows', { 'Advantage games - transition': 'transition', Transition: null });
+
+  const offered = async () => offeredCategories(await db.getAll(db.STORES.drills),
+    await db.getMeta('customCategories', []), await db.getMeta('hiddenCategories', []));
+  ok('the duplicate starter category was offered beside his own', (await offered()).includes('Advantage games (transition)'));
+
+  await removeCategory('Advantage games (transition)');
+  ok('a starter category with nothing in it can be removed', !(await offered()).includes('Advantage games (transition)'));
+  ok('his own is still offered', (await offered()).includes('Advantage games - transition'));
+
+  const moved = await removeCategory('Transition', { moveTo: 'Advantage games - transition', runsToo: true });
+  ok('removing one that has drills moves them where he chose', moved.drills === 1 && moved.runs === 1);
+  ok('Transition is no longer offered', !(await offered()).includes('Transition'));
+  ok('the recorded run moved too',
+    (await db.getAll(db.STORES.blocks)).every((b) => b.category === 'Advantage games - transition'));
+  // The category merged INTO keeps its own contact setting — the removed one
+  // was set to "not contact", and that must not travel with its drills.
+  const map = await db.getMeta('contactRows', null);
+  ok('the destination keeps its contact setting', map['Advantage games - transition'] === 'transition', JSON.stringify(map));
+  ok('so the moved drill counts as transition contact',
+    hist.reportRowsFor(await db.getAll(db.STORES.blocks), await db.getAll(db.STORES.drills))
+      .rows.some((r) => r.key === 'band:transition' && r.runs === 1));
+
+  // Settings lists every offered category with Remove, including unused ones.
+  root = newRoot();
+  await settings.render(root);
+  await flush();
+  contains('Settings lists an unused starter category so it can be removed', root, 'Cool-down / recovery');
+  ok('every category row has a Remove button',
+    root.querySelectorAll('button').filter((b) => b.textContent === 'Remove…').length >= 5);
+  await db.importAll(before, { replace: true });
 }
 
 /* ---- 2026-09-12 stage 2: seasons and phases ----

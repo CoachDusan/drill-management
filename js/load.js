@@ -612,6 +612,18 @@ export function fmtLoad(n) {
   return Math.round(n).toLocaleString();
 }
 
+/** A long total the way a coach says it: "24 h 10 min", "45 min". The
+ *  stopwatch style ("1450:00") is right for one drill and unreadable for a
+ *  month (seen on the Analysis screen, 2026-09-22). */
+export function fmtDuration(mins) {
+  if (mins == null) return '—';
+  const total = Math.round(mins);
+  if (total < 60) return `${total} min`;
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
 export function fmtMinutes(mins) {
   if (mins == null) return '—';
   const total = Math.round(mins * 60);

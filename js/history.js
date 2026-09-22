@@ -25,6 +25,7 @@ import {
 import {
   blockMinutes, blockLoad, blockTissue, blockContactMinutes,
   participationOf, blockLiveMinutes,
+  fmtLoad, fmtMinutes, fmtDuration, fmtRatio, acwrFlag, monotonyFlag,
 } from './load.js';
 
 /* ---- ranges ----------------------------------------------------------- */
@@ -545,8 +546,9 @@ export function categoryMix(rollups) {
  * who sat out half a practice gets half of it — and a day he was not on the
  * session roster at all is a real zero, because he genuinely did none of it.
  */
-export function playerDaySeries(sessions, blocks, playerId, range) {
+export function playerDaySeries(sessions, blocks, playerId, range, { drills = [], contactRows = null } = {}) {
   const byDate = blocksByDate(sessions, blocks);
+  const library = new Map(drills.map((d) => [d.id, d]));
   const rosterByDate = new Map();
   for (const s of sessions) {
     if (!s.date) continue;
@@ -563,7 +565,7 @@ export function playerDaySeries(sessions, blocks, playerId, range) {
     const onRoster = (rosterByDate.get(cursor) || new Set()).has(playerId);
     const mine = onRoster ? dayBlocks : [];
 
-    let load = 0, minutes = 0, contact = 0, ratedMinutes = 0;
+    let load = 0, minutes = 0, contact = 0, contactUntimed = 0, ratedMinutes = 0;
     const tissue = {};
     for (const t of TISSUE) tissue[t.key] = 0;
 
@@ -574,7 +576,12 @@ export function playerDaySeries(sessions, blocks, playerId, range) {
       minutes += m;
       const l = blockLoad(b);
       if (l !== null) { load += l * share; ratedMinutes += m; }
-      contact += blockContactMinutes(b) * share;
+      // Contact is his definition (the category) and his measure (the second
+      // stopwatch), the same as the report. An untimed contact drill is
+      // carried separately, never folded in as zero or as its full length.
+      const c = contactTimeOf(b, library, contactRows);
+      if (c && c.live !== null) contact += c.live * share;
+      else if (c) contactUntimed += c.full * share;
       for (const t of TISSUE) {
         const s = blockTissue(b, t.key);
         if (s !== null) tissue[t.key] += s * share;
@@ -582,7 +589,7 @@ export function playerDaySeries(sessions, blocks, playerId, range) {
     }
 
     out.push({
-      date: cursor, load, minutes, contactMinutes: contact, tissue,
+      date: cursor, load, minutes, contactMinutes: contact, contactUntimedMinutes: contactUntimed, tissue,
       onRoster, coverage: minutes ? ratedMinutes / minutes : 1,
     });
     cursor = addDays(cursor, 1);
@@ -591,9 +598,9 @@ export function playerDaySeries(sessions, blocks, playerId, range) {
 }
 
 /** Totals per player over the window, for the squad table. */
-export function playerTotals(sessions, blocks, players, range) {
+export function playerTotals(sessions, blocks, players, range, opts = {}) {
   return players.map((p) => {
-    const series = playerDaySeries(sessions, blocks, p.id, range);
+    const series = playerDaySeries(sessions, blocks, p.id, range, opts);
     const tissue = {};
     for (const t of TISSUE) tissue[t.key] = series.reduce((s, d) => s + d.tissue[t.key], 0);
     return {
@@ -602,6 +609,7 @@ export function playerTotals(sessions, blocks, players, range) {
       load: series.reduce((s, d) => s + d.load, 0),
       minutes: series.reduce((s, d) => s + d.minutes, 0),
       contactMinutes: series.reduce((s, d) => s + d.contactMinutes, 0),
+      contactUntimedMinutes: series.reduce((s, d) => s + d.contactUntimedMinutes, 0),
       daysTrained: series.filter((d) => d.minutes > 0).length,
       tissue,
     };
@@ -863,6 +871,63 @@ export function contactRowOf(block, library, map = null) {
   const big = n === 1;
   if (role === 'continuous') return big ? 'c5Cont' : 'smCont';
   return big ? 'c5Shell' : 'smShell';
+}
+
+/** One run's contact under his definition, or null when it is not in a
+ *  contact row. `live` is the contact time — null when the second stopwatch
+ *  was not run, which is "not timed", not zero. */
+export function contactTimeOf(block, library, map = null) {
+  const row = contactRowOf(block, library, map);
+  const info = CONTACT_ROWS.find((r) => r.key === row);
+  if (!info) return null;
+  return { row, group: info.group, full: blockMinutes(block), live: blockLiveMinutes(block) };
+}
+
+/* ---- Analysis in plain words (2026-09-22) ---------------------------------
+ *
+ * "Make it easier to read." The screen opened on four tiles of numbers; a
+ * coach reading it between practices wants the sentence first and the detail
+ * underneath. Every clause here is a number already on the screen — nothing
+ * is worked out only for the summary — and the honesty rules travel with it:
+ * unrated runs make a total incomplete, untimed contact is named, a
+ * provisional ratio says so.
+ */
+export function plainSummary({ label, days, sessionCount, contact, acwrPoint = null, monoPoint = null, recentDays = null }) {
+  const out = [];
+  const minutes = days.reduce((s, d) => s + d.minutes, 0);
+  const load = days.reduce((s, d) => s + d.load, 0);
+  const unrated = days.reduce((s, d) => s + (Array.isArray(d.unrated) ? d.unrated.length : 0), 0);
+  if (!sessionCount) return [`${label}: nothing recorded.`];
+  out.push(`${label}: ${sessionCount} practice${sessionCount === 1 ? '' : 's'}, ${fmtDuration(minutes)} on court, load ${fmtLoad(load)} AU${unrated ? ` — incomplete, ${unrated} drill run${unrated === 1 ? '' : 's'} still unrated` : ''}.`);
+
+  // "The 7 days before" may lie outside the window: load does not reset on
+  // the day inseason starts, so the first inseason week is compared with the
+  // last preseason one. `recentDays` is the history up to the window's end.
+  const trail = recentDays || days;
+  const cmp = comparePeriods(trail, 7);
+  if (cmp && cmp.change !== null && trail.length >= 14) {
+    const ch = Math.round(cmp.change);
+    out.push(`Last 7 days: ${fmtLoad(cmp.load)} AU — ${Math.abs(ch) < 5 ? 'about the same as' : `${Math.abs(ch)}% ${ch > 0 ? 'more than' : 'less than'}`} the 7 days before.`);
+  }
+
+  if (contact && contact.minutes) {
+    out.push(contact.timedRuns
+      ? `Contact: ${fmtDuration(contact.liveMinutes)} of live play in contact drills${contact.liveCoverage < 0.999 ? ` (only ${Math.round(contact.liveCoverage * 100)}% of contact-drill time was timed, so this is short)` : ''}.`
+      : `Contact drills ran for ${fmtDuration(contact.minutes)}, but none were timed on the second stopwatch, so there is no contact time.`);
+  } else {
+    out.push('No contact drills in this window.');
+  }
+
+  if (acwrPoint) {
+    const real = acwrPoint.acwr;
+    const v = real != null ? real : acwrPoint.provisional;
+    if (v != null) out.push(`Acute:chronic ${fmtRatio(v)}${real == null ? ' (provisional)' : ''} — ${acwrFlag(v).text.charAt(0).toLowerCase()}${acwrFlag(v).text.slice(1)}.`);
+  }
+  if (monoPoint && monoPoint.monotony != null) {
+    const f = monotonyFlag(monoPoint.monotony).text;
+    out.push(`Monotony ${fmtRatio(monoPoint.monotony)} — ${f.charAt(0).toLowerCase()}${f.slice(1)}.`);
+  }
+  return out;
 }
 
 /**

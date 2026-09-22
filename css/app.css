@@ -277,7 +277,7 @@ select {
 .i1 { background: var(--i1); } .i2 { background: var(--i2); } .i3 { background: var(--i3); }
 .i4 { background: var(--i4); } .i5 { background: var(--i5); }
 
-.flag { padding: 3px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 650; }
+.flag { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12.5px; font-weight: 650; line-height: 1.35; }
 .flag.ok    { background: var(--ok-soft);    color: var(--ok); }
 .flag.watch { background: var(--watch-soft); color: var(--watch); }
 .flag.high  { background: var(--high-soft);  color: var(--high); }
@@ -476,3 +476,22 @@ table.report tfoot td {
   font-weight: 650;
 }
 table.report tbody td:first-child { min-width: 140px; }
+
+/* ---- Analysis: the plain summary, tile meanings, folded sections ---- */
+.summary-lead { margin: 0; font-size: 1.05rem; font-weight: 600; line-height: 1.45; }
+.summary-list { margin: 8px 0 0; padding-left: 20px; line-height: 1.5; color: var(--text-2); }
+.summary-list li { margin: 2px 0; }
+.stat .meaning {
+  margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line-soft);
+  font-size: .8rem; line-height: 1.4; color: var(--text-2);
+}
+p > .meaning, div > .meaning { font-size: .8rem; line-height: 1.4; color: var(--text-2); margin-top: 8px; }
+.fold-head {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px;
+  padding: 10px 14px; text-align: left; background: var(--surface); color: var(--text);
+  border: 1px solid var(--line); border-radius: 12px; cursor: pointer;
+}
+.fold-caret { width: 16px; color: var(--text-2); }
+.fold-title { font-weight: 650; font-size: 1.05rem; }
+.fold-sum { margin-left: auto; color: var(--text-2); font-size: .85rem; text-align: right; }
+@media (max-width: 560px) { .fold-head { flex-wrap: wrap; } .fold-sum { margin-left: 26px; text-align: left; } }

@@ -1170,6 +1170,49 @@ Reports contact rows and the Settings category list on the tablet.
 A views test that failed only Monday to Wednesday (its practice was dated three
 days back, which is last week on those days) now dates its own practice today.
 
+### Stage 2: Analysis, by phase and easier to read
+
+"Do analysis similar way like for reports — preseason, inseason, offseason;
+and other important things to make it easier to read." He named no specific
+difficulty, so four changes were offered and he took all four:
+
+- **Phase buttons beside the rolling windows.** 2 / 4 / 8 weeks stay (Analysis
+  is still mostly about now); under them sit the season (same choice as
+  Reports and Practice, `viewSeasonId`) and Preseason · Inseason · Whole
+  season. Offseason only once some season has one. With no season set up the
+  old "Season" button stays, as "Everything".
+- **ACWR, monotony and "vs the week before" ignore the window's start.** The
+  first inseason week is compared with the last preseason one — load does not
+  reset on the day a phase begins (the same rule already recorded for ACWR).
+  For a phase that has ended, those figures are read on its last day and the
+  screen says so, rather than showing today's ratio under a preseason heading.
+- **A plain summary first** (`plainSummary()` in history.js): one sentence for
+  the window, then last 7 days vs the 7 before, contact, ACWR, monotony. Every
+  clause is a figure shown lower down; unrated, untimed and provisional are
+  said in the sentence. A test forbids injury or overtraining wording.
+- **Every tile says what its number means** in coaching words (`.meaning`).
+- **Drills and Squad start folded** with a one-line summary ("7 drills · most
+  load: 3on2 advantage"). They open in place, without re-rendering.
+- **A Contact panel**: the three formats as tiles, then week by week, newest
+  first. Weeks run down the page so a whole season fits.
+- **Long totals read as hours** (`fmtDuration`: "24 h 10 min"). "1450:00 on
+  court" was unreadable; report tables keep the stopwatch style.
+
+**Player contact follows the new definition too.** The squad column, the
+player card and the practice summary's Contact tile all counted every drill
+with live defence at full length — the 6on6 warm-up included. They now use
+the category rule and the second stopwatch, like Reports. Untimed contact
+drills are carried separately and starred, never folded in.
+
+**Verified:** five deliberate breaks each failed the suite — untimed contact
+counted at full length, player contact back on the old grid rule, a
+provisional ratio unmarked in the summary, the phase window not applied, and
+sections not folded. **Seen in a real browser engine this time**: a Swift
+WKWebView script (scratch only, not in the repo) seeded 32 invented practices
+into a throwaway IndexedDB and screenshotted Analysis at 1280 and 900 px. That
+caught two faults no test did — "no earlier week to compare" at the start of
+a phase, and "1450:00 on court" — and a flag chip wrapping into ragged pieces.
+
 ## Hosting
 
 Served by GitHub Pages from `main` / root:

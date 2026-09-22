@@ -588,7 +588,10 @@ if (summary) {
   contains('contact exposure is reported separately from load', summary, 'Contact time');
   contains('the summary reports live density', summary, 'Live density');
   contains('and qualifies how much it covers', summary, 'covers');
-  contains('and as a share of the session', summary, '% of the session');
+  // Contact on the summary is the report's contact (2026-09-22): category +
+  // second stopwatch, so it says what it is measured on, never a bare number.
+  ok('and says what the contact time is measured on',
+    ['no contact drills', 'live part of', 'not timed'].some((t) => summary.textContent.indexOf(t) !== -1));
 
   // Stage 3: the rating saved earlier must show up as a comparison here.
   contains('the summary compares plan against feeling', summary, 'what they felt');
@@ -665,7 +668,7 @@ contains('movement totals appear', root, 'Jumping');
 /* The honesty rules, on a screen where breaking them is most dangerous. */
 contains('an untagged drill is admitted, not counted as zero', root, 'not in those movement totals');
 contains('AU are not comparable between tissues', root, 'NOT comparable between tissues');
-contains('and load is not what the body did', root, 'Compared against the squad median');
+contains('the squad is compared with the median, not the average', root, 'squad median, not the average');
 
 /* ---- the game week, from the coach's own label ---- */
 
@@ -1414,6 +1417,39 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
   await analysis.render(root);
   await flush();
   contains('analysis still renders with seasons set up', root, 'Analysis');
+
+  /* ---- 2026-09-22: Analysis by phase, like Reports ---- */
+  await db.setMeta('viewSeasonId', saved[0].id);
+  root = newRoot();
+  await analysis.render(root);
+  await flush();
+  ok('Analysis offers Preseason, Inseason and Whole season',
+    ['Preseason', 'Inseason', 'Whole season'].every((t) => !!buttonIn(root, t)));
+  ok('beside the rolling windows', !!buttonIn(root, '4 weeks'));
+  buttonIn(root, 'Inseason').click();
+  await flush();
+  contains('the summary names the phase it is about', root, 'Inseason Test 1/2 so far: ');
+  ok('an inseason view leaves the preseason practice out', root.textContent.indexOf('PRE-drill') === -1);
+  contains('and keeps the inseason one', root, 'IN-drill');
+  buttonIn(root, 'Preseason').click();
+  await flush();
+  contains('preseason is its own window', root, 'Preseason Test 1/2: ');
+  contains('a closed phase says its ratios are read on its last day', root, 'the last day of this window — not today');
+  ok('and it does not reach back before the season', root.textContent.indexOf('OLD-drill') === -1);
+
+  /* Folded sections: closed until tapped, with a one-line summary. */
+  const head = root.querySelectorAll('button').filter((b) => b.textContent.indexOf('Your drills') !== -1)[0];
+  ok('the drill table is folded behind a one-line summary', !!head && head.textContent.indexOf('most load: PRE-drill') !== -1, head && head.textContent);
+  const body = head && head.parentNode.children[1];
+  ok('and starts closed', body && body.style.display === 'none');
+  head.click();
+  ok('tapping opens it in place', body.style.display === '');
+  head.click();
+  ok('and again closes it', body.style.display === 'none');
+
+  /* Every tile says what its number means. */
+  contains('monotony is explained in coaching words', root, 'every day looks the same');
+  contains('and so is the acute:chronic ratio', root, 'the average week of the last 4');
 
   await db.setMeta('viewSeasonId', null);
   reports.teardown();

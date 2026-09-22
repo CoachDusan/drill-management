@@ -14,6 +14,7 @@ import {
   aggregate, sessionRollups, gameDayCoverage, gameWeekComparison,
   categoryByGameDay, drillWindowAverages,
   drillRollups, categoryMix, playerDaySeries, playerTotals, comparePeriods,
+  plainSummary, contactTimeOf,
   startOfWeek, startOfMonth, endOfMonth, daysBetween, periodRange, columnUnitFor,
   columnsFor, blockMatchup, contactRowOf, reportRowsFor, reportTable, drillReport, spreadOf,
   gameDayCounts, perPractice, REPORT_GAME_DAYS,
@@ -705,6 +706,75 @@ const blk = (sessionId, intensity, minutes, extra = {}) => ({
   eq('live minutes too', avg.liveMinutes, 2);
   eq('the live percentage does not change', avg.liveDensity, 0.4);
   ok('no practices means no average, not zero', perPractice(cell, 0) === null);
+}
+
+/* ---- 2026-09-22: a player's contact is the report's contact ----
+ * The squad column used to count every drill with live defence at full
+ * length — the 6on6 warm-up included, every whistle included. It is now the
+ * category's definition and the second stopwatch's measure. */
+{
+  const sessions = [ses('c1', D(0))];
+  const blocks = [
+    // 6on6 warm-up entered as 5v5 with live defence: not contact.
+    blk('c1', 4, 10, { category: 'Warm-up', situation: 1, contact: true, liveMs: 8 * 60000 }),
+    // 5on5 live, 20 min, 12 live; p2 limited.
+    blk('c1', 7, 20, { category: '5on5 live', situation: 1, contact: true, liveMs: 12 * 60000, participation: { p2: 0.5 } }),
+    // Shell that goes live, not timed.
+    blk('c1', 5, 15, { category: 'Defense', situation: 1, contact: true, liveMs: null }),
+  ];
+  const range = { from: D(0), to: D(0) };
+  const p1 = playerDaySeries(sessions, blocks, 'p1', range);
+  eq('contact time is the live part of the contact drills only', p1[0].contactMinutes, 12);
+  eq('an untimed contact drill is carried apart, not as zero or as contact', p1[0].contactUntimedMinutes, 15);
+  const p2 = playerDaySeries(sessions, blocks, 'p2', range);
+  eq('a limited player gets half the contact', p2[0].contactMinutes, 6);
+  const tot = playerTotals(sessions, blocks, [{ id: 'p1' }], range);
+  eq('and the squad table totals it', tot[0].contactMinutes, 12);
+  eq('with the untimed part beside it', tot[0].contactUntimedMinutes, 15);
+  eq('a warm-up is not contact, whatever its matchup', contactTimeOf(blocks[0], new Map()), null);
+}
+
+/* ---- 2026-09-22: Analysis in plain words ----
+ * Every clause is a number the screen already shows, and the honesty rules
+ * go into the sentence with it. */
+{
+  const sessions = [];
+  const blocks = [];
+  for (let i = 0; i < 14; i++) {
+    sessions.push(ses(`p${i}`, D(i)));
+    blocks.push(blk(`p${i}`, 5, i < 7 ? 20 : 24));   // 100 AU/day, then 120
+  }
+  const range = { from: D(0), to: D(13) };
+  const days = dayRollups(sessions, blocks, range);
+  const timed = { minutes: 40, timedRuns: 2, liveMinutes: 25, liveCoverage: 1 };
+  const lines = plainSummary({ label: 'Inseason so far', days, sessionCount: 14, contact: timed });
+  ok('it opens with the window, the practices, court time and load',
+    lines[0].indexOf('Inseason so far: 14 practices') === 0 && lines[0].indexOf('AU') !== -1, lines[0]);
+  ok('it compares the last 7 days with the 7 before', lines.some((l) => l.indexOf('20% more than') !== -1), lines.join(' | '));
+  ok('contact is the live time, said the way a coach says it', lines.some((l) => l.indexOf('Contact: 25 min') === 0), lines.join(' | '));
+
+  const partly = plainSummary({ label: 'X', days, sessionCount: 14, contact: { minutes: 40, timedRuns: 1, liveMinutes: 10, liveCoverage: 0.5 } });
+  ok('partly timed contact says it is short', partly.some((l) => l.indexOf('so this is short') !== -1));
+  const none = plainSummary({ label: 'X', days, sessionCount: 14, contact: { minutes: 40, timedRuns: 0, liveMinutes: 0, liveCoverage: 0 } });
+  ok('untimed contact is named, never a zero', none.some((l) => l.indexOf('none were timed') !== -1) && !none.some((l) => l.indexOf('Contact: 0') !== -1));
+
+  const unratedDays = dayRollups([ses('u', D(0))], [blk('u', null, 20)], { from: D(0), to: D(0) });
+  const u = plainSummary({ label: 'X', days: unratedDays, sessionCount: 1, contact: null });
+  ok('unrated drills make the load incomplete, and it says so', u[0].indexOf('incomplete, 1 drill run still unrated') !== -1, u[0]);
+
+  const prov = plainSummary({ label: 'X', days, sessionCount: 14, contact: null, acwrPoint: { acwr: null, provisional: 1.2 } });
+  ok('a provisional ratio is marked provisional in the sentence', prov.some((l) => l.indexOf('1.20 (provisional)') !== -1), prov.join(' | '));
+  const real = plainSummary({ label: 'X', days, sessionCount: 14, contact: null, acwrPoint: { acwr: 1.2, provisional: 1.2 } });
+  ok('a real one is not', real.some((l) => l.indexOf('Acute:chronic 1.20 —') === 0));
+  // The wording is a prompt to look, never a diagnosis — same rule as gapFlag.
+  const words = [...lines, ...partly, ...none, ...u, ...prov].join(' ').toLowerCase();
+  ok('no injury or overtraining language', !/injur|overtrain|risk of|danger/.test(words), words);
+  // The first inseason week is compared with the last preseason one: load
+  // does not reset when a phase starts.
+  const phaseOnly = plainSummary({ label: 'Inseason', days: days.slice(7), sessionCount: 7, contact: null, recentDays: days });
+  ok('a week at the start of a phase is compared with the week before it',
+    phaseOnly.some((l) => l.indexOf('20% more than') !== -1), phaseOnly.join(' | '));
+  eq('an empty window says so plainly', plainSummary({ label: 'Preseason', days: [], sessionCount: 0 })[0], 'Preseason: nothing recorded.');
 }
 
 print(`\n${pass} passed, ${fail} failed`);

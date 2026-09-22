@@ -16,7 +16,7 @@ import {
 } from '../models.js';
 import {
   blockMinutes, blockLoad, sessionTeamLoad, sessionTeamMinutes,
-  sessionLoadByPlayer, blockTissue, tissueCoverage, contactShare,
+  sessionLoadByPlayer, blockTissue, tissueCoverage,
   blockLiveDensity, blockLiveMinutes, sessionLiveDensity, loadCoverage,
   blockLiveLabel, orderedBlocks, renumber,
   fmtLoad, fmtClock, fmtMinutes, fmtDensity, fmtLive,
@@ -25,6 +25,7 @@ import {
   h, mount, toast, openModal, confirmDanger, field,
   textInput, numberInput, selectInput, emptyState, reorderable, grip,
 } from '../ui.js';
+import * as hist from '../history.js';
 import { intensityPicker, intensityBadge } from '../components.js';
 import { collectRPE, feltPanel } from './rpe.js';
 
@@ -1353,19 +1354,25 @@ function liveNote(blocks) {
 }
 
 /** Movement totals for a session, plus an honest note when drills are untagged. */
-function tissueSummaryBlock(blocks) {
+function tissueSummaryBlock(blocks, drills = [], contactRows = null) {
   const coverage = tissueCoverage(blocks);
   const wrap = h('div', { style: { marginTop: '18px' } });
   wrap.appendChild(h('h3', { text: 'Movement demands' }));
 
   if (coverage.totalMinutes === 0) return wrap;
 
-  const contact = contactShare(blocks);
+  /* The same contact as Reports and Analysis (2026-09-22): the category
+     decides what is contact, the second stopwatch decides how much. It used
+     to count every drill with live defence at full length, which put the
+     6on6 warm-up in and every whistle with it. */
+  const contact = hist.reportRowsFor(blocks, drills, { contactRows }).rows.find((r) => r.key === 'band:whole');
   wrap.appendChild(h('div', { class: 'grid four' }, [
     h('div', { class: 'stat' }, [
       h('div', { class: 'k', text: 'Contact time' }),
-      h('div', { class: 'v', text: String(Math.round(contact.contactMinutes)) }),
-      h('div', { class: 'n', text: `minutes · ${Math.round(contact.fraction * 100)}% of the session` }),
+      h('div', { class: 'v', text: contact.timedRuns ? fmtMinutes(contact.liveMinutes) : '—' }),
+      h('div', { class: 'n', text: !contact.minutes ? 'no contact drills'
+        : !contact.timedRuns ? `not timed · ${fmtMinutes(contact.minutes)} of contact drills`
+          : `live part of ${fmtMinutes(contact.minutes)}${contact.liveCoverage < 0.999 ? ' · partly timed' : ''}` }),
     ]),
   ].concat(TISSUE.map((t) => {
     const total = blocks.reduce((sum, b) => sum + (blockTissue(b, t.key) || 0), 0);
@@ -1468,10 +1475,12 @@ async function editSessionRoster(session) {
 }
 
 async function openSessionSummary(session) {
-  const [players, blocks, playerSessions] = await Promise.all([
+  const [players, blocks, playerSessions, allDrills, contactRows] = await Promise.all([
     db.getAll(db.STORES.players),
     db.getBy(db.STORES.blocks, 'sessionId', session.id),
     db.getBy(db.STORES.playerSessions, 'sessionId', session.id),
+    db.getAll(db.STORES.drills),
+    db.getMeta('contactRows', null),
   ]);
   const roster = players.filter((p) => (session.rosterIds || []).includes(p.id));
   const byPlayer = sessionLoadByPlayer(blocks, roster.map((p) => p.id));
@@ -1551,7 +1560,7 @@ async function openSessionSummary(session) {
         ]),
       ]),
 
-      tissueSummaryBlock(ordered),
+      tissueSummaryBlock(ordered, allDrills, contactRows),
 
       feltPanel(session, roster, ordered, playerSessions)
         || h('div', { class: 'note', style: { marginTop: '18px' } }, [

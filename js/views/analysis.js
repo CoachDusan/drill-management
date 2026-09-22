@@ -6,10 +6,18 @@
  * answers neither question.
  *
  * Order on the screen is the order he asks the questions in:
+ *   0. In one paragraph, how is it going?      — the plain summary
  *   1. Is this week heavy?                     — the week strip
- *   2. What does my week before a game look like? — game days
- *   3. Where is that load coming from?         — categories, then drills
- *   4. Who is carrying it?                     — the squad
+ *   2. How much contact?                       — contact, by week
+ *   3. What does my week before a game look like? — game days
+ *   4. Where is that load coming from?         — categories, then drills
+ *   5. Who is carrying it?                     — the squad
+ *
+ * "Easier to read" (2026-09-22): the sentence comes first, every tile says
+ * what its number means in coaching words, and the two long tables (drills,
+ * squad) start folded with a one-line summary. Season and phase work as on
+ * Reports: Preseason / Inseason / Whole season sit beside the rolling
+ * windows.
  *
  * Every total on this screen can be incomplete, because an unrated drill
  * contributes no load. Coverage therefore travels with the numbers rather than
@@ -22,31 +30,39 @@ import * as seasonsLib from '../seasons.js';
 import { h, mount, emptyState, openModal } from '../ui.js';
 import { TISSUE, formatDate, GAME_DAY_ORDER, toDateKey } from '../models.js';
 import {
-  fmtLoad, fmtMinutes, fmtRatio, fmtDensity,
+  fmtLoad, fmtMinutes, fmtDuration, fmtRatio, fmtDensity,
   acwrSeries, monotonySeries, acwrFlag, monotonyFlag, provisionalNote,
   blockMinutes, blockLoad, blockLiveDensity,
 } from '../load.js';
 import * as hist from '../history.js';
 
 let rootEl = null;
-let rangeKey = '4w';        // survives a re-render, resets when the app reloads
+let rangeKey = '4w';        // survives a re-render, resets when the app reloads;
+                            // 'phase:inseason' etc. for a season phase
 let selectedGD = 'GD-1';    // which game day the category breakdown is showing
+const openFolds = new Set(); // which folded sections he has opened
 
 export async function render(root) {
   rootEl = root;
 
-  const [sessions, blocks, players, drills, seasonList] = await Promise.all([
+  const [sessions, blocks, players, drills, seasonList, pickedSeason, contactRows] = await Promise.all([
     db.getAll(db.STORES.sessions),
     db.getAll(db.STORES.blocks),
     db.getAll(db.STORES.players),
     db.getAll(db.STORES.drills),
     db.getMeta('seasons', []),
+    db.getMeta('viewSeasonId', null),
+    db.getMeta('contactRows', null),
   ]);
-  /* Analysis is about NOW, so "Season" is the season today is in — not the
-     one Reports happens to be showing. Outside every season it falls back to
-     all history, as before seasons existed. */
-  const currentSeason = seasonsLib.seasonFor(seasonList, toDateKey(new Date()));
+  const today = toDateKey(new Date());
+  /* The drill "All season" averages are about NOW, so they start at the
+     season today is in. Outside every season they fall back to all history,
+     as before seasons existed. */
+  const currentSeason = seasonsLib.seasonFor(seasonList, today);
   const seasonFrom = currentSeason ? currentSeason.start : null;
+  /* The phase buttons follow the season the other screens are showing — the
+     same choice as Reports and Practice, so the three never disagree. */
+  const season = seasonsLib.viewedSeason(seasonList, pickedSeason);
 
   const head = h('div', { class: 'page-head' }, [
     h('div', {}, [
@@ -61,23 +77,37 @@ export async function render(root) {
     return;
   }
 
-  /* The maths runs on the WHOLE season, not on the visible window. ACWR and
+  /* The maths runs on the WHOLE history, not on the visible window. ACWR and
      monotony both count backwards from a day, so a 4-week view computed on
-     4 weeks of series would think the season started a month ago. Compute
-     once over everything, then slice for display. */
+     4 weeks of series would think the season started a month ago — and a
+     preseason view must not think load began on the first day of preseason.
+     Compute once over everything, then slice for display. */
   const seasonRange = hist.rangeFor(sessions, 'season');
   const seasonDays = hist.dayRollups(sessions, blocks, seasonRange);
   const acwr = acwrSeries(hist.loadSeries(seasonDays));
   const monotony = monotonySeries(hist.loadSeries(seasonDays));
 
-  const range = hist.rangeFor(sessions, rangeKey, undefined, seasonFrom);
+  const range = windowRange(sessions, season, seasonList, seasonFrom, today);
   const days = seasonDays.filter((d) => d.date >= range.from && d.date <= range.to);
+  /* The day the tiles are read on: today for a rolling window, the last day
+     of a phase that has ended. Inseason's ratio on the last day of preseason
+     is not a thing; preseason's own last day is. */
+  const refDate = days.length ? days[days.length - 1].date : range.to;
+  const isNow = refDate >= today;
+  const acwrPoint = acwr.find((p) => p.date === refDate) || acwr[acwr.length - 1] || {};
+  /* Everything up to that day, ignoring the window's start: "vs the week
+     before" must reach back into preseason for the first inseason week,
+     for the same reason ACWR does. */
+  const recentDays = seasonDays.filter((d) => d.date <= refDate);
+  const monoPoint = monotony.find((p) => p.date === refDate) || monotony[monotony.length - 1] || {};
 
   const windowBlocks = days.flatMap((d) => d.blocks);
   const windowSessions = sessions.filter((s) => s.date >= range.from && s.date <= range.to);
   const rolls = hist.drillRollups(windowSessions, windowBlocks, drills);
   const cov = hist.windowCoverage(days);
   const rollups = hist.sessionRollups(windowSessions, windowBlocks, drills);
+  const contactRowsNow = hist.reportRowsFor(windowBlocks, drills, { contactRows });
+  const whole = contactRowsNow.rows.find((r) => r.key === 'band:whole');
 
   /* Week / month / season averages are computed over EVERYTHING, not over the
      visible window: the whole point is checking a drill's recent behaviour
@@ -86,50 +116,143 @@ export async function render(root) {
     hist.drillWindowAverages(sessions, blocks, drills, undefined, seasonFrom).map((w) => [w.key, w.windows]));
   rolls.forEach((r) => { r.windows = winByKey.get(r.key) || null; });
 
+  const active = players.filter((p) => p.status !== 'inactive');
+  const squad = active.length
+    ? hist.playerTotals(windowSessions, windowBlocks, active, range, { drills, contactRows }).filter((t) => t.minutes > 0)
+    : [];
+
   mount(root,
     head,
-    rangeBar(),
-    weekPanel(days, acwr, monotony, cov),
+    rangeBar(season, seasonList),
+    summaryCard(range, days, windowSessions.length, whole, acwrPoint, monoPoint, isNow, refDate, recentDays),
+    weekPanel(recentDays, acwrPoint, monoPoint, cov, isNow, refDate, days),
     coverageNote(cov),
+    contactPanel(windowSessions, windowBlocks, drills, range, contactRows, contactRowsNow),
     gameWeekPanel(rollups),
     categoryByGameDayPanel(rollups),
     categoryPanel(rolls),
-    drillPanel(rolls),
-    squadPanel(windowSessions, windowBlocks, players, range, days),
+    rolls.length ? fold('drills', 'Your drills',
+      `${rolls.length} drill${rolls.length === 1 ? '' : 's'} · most load: ${rolls[0].name}`,
+      () => drillPanel(rolls)) : null,
+    squad.length ? fold('squad', 'The squad',
+      `${squad.length} player${squad.length === 1 ? '' : 's'} · most load: ${squad[0].player.name}`,
+      () => squadPanel(squad, range, days)) : null,
   );
+}
+
+/** The window on screen: a rolling 2 / 4 / 8 weeks, or a phase of the season.
+ *  A phase with no start date, or a season that has gone, falls back to four
+ *  weeks rather than showing an empty screen. */
+function windowRange(sessions, season, seasonList, seasonFrom, today) {
+  if (rangeKey.startsWith('phase:')) {
+    const phase = rangeKey.slice(6);
+    const r = season ? seasonsLib.closeRange(seasonsLib.phaseRange(season, phase, seasonList), sessions, today) : null;
+    if (r) {
+      const open = r.to >= today && r.from <= today;
+      return {
+        from: r.from, to: r.to, key: rangeKey,
+        label: `${seasonsLib.phaseLabel(phase)} ${season.label}${open ? ' so far' : ''}`,
+      };
+    }
+    rangeKey = '4w';
+  }
+  if (season && rangeKey === 'season') rangeKey = 'phase:all';
+  if (rangeKey.startsWith('phase:')) return windowRange(sessions, season, seasonList, seasonFrom, today);
+  const r = hist.rangeFor(sessions, rangeKey, undefined, seasonFrom);
+  return { ...r, label: r.key === 'season' ? 'All recorded practices' : `Last ${r.label}` };
 }
 
 /* ---- range switcher ---------------------------------------------------- */
 
-function rangeBar() {
-  return h('div', { class: 'util' }, hist.RANGES.map((r) => h('button', {
-    class: r.key === rangeKey ? 'btn btn-sm btn-primary' : 'btn btn-sm',
-    onclick: () => { rangeKey = r.key; render(rootEl); },
-  }, r.label)));
+function rangeBar(season, list) {
+  const btn = (key, label, disabled = false, title = '') => h('button', {
+    class: key === rangeKey ? 'btn btn-sm btn-primary' : 'btn btn-sm',
+    disabled, title,
+    onclick: () => { rangeKey = key; render(rootEl); },
+  }, label);
+  const rolling = hist.RANGES.filter((r) => r.key !== 'season' || !season);
+  return h('div', { style: { marginBottom: '6px' } }, [
+    h('div', { class: 'util' }, rolling.map((r) => btn(r.key, r.key === 'season' ? 'Everything' : r.label))),
+    season ? h('div', { class: 'util' }, [
+      list.length > 1
+        ? h('select', {
+          style: { width: 'auto', minHeight: '40px' },
+          onchange: async (e) => { await db.setMeta('viewSeasonId', e.target.value); render(rootEl); },
+        }, seasonsLib.sortSeasons(list).reverse().map((sea) =>
+          h('option', { value: sea.id, selected: sea.id === season.id }, sea.label)))
+        : h('span', { class: 'chip on', style: { alignSelf: 'center' }, text: season.label }),
+      // Offseason only once some season has one — he does not track it.
+      ...['preseason', 'inseason', ...(list.some((sea) => sea.offseason) ? ['offseason'] : []), 'all'].map((k) => {
+        const r = seasonsLib.phaseRange(season, k, list);
+        return btn(`phase:${k}`, r ? seasonsLib.phaseLabel(k) : `${seasonsLib.phaseLabel(k)} · no date`,
+          !r, r ? '' : 'No start date yet — set it on the Practice screen');
+      }),
+    ]) : null,
+  ]);
+}
+
+/* ---- 0. the summary -------------------------------------------------------
+ * The sentence before the numbers. Every clause is a figure shown further
+ * down; nothing here is worked out only for the summary. */
+function summaryCard(range, days, sessionCount, whole, acwrPoint, monoPoint, isNow, refDate, recentDays) {
+  const lines = hist.plainSummary({
+    label: range.label, days, sessionCount, contact: whole, acwrPoint, monoPoint, recentDays,
+  });
+  return h('div', { class: 'card summary', style: { margin: '8px 0 16px' } }, [
+    h('p', { class: 'summary-lead', text: lines[0] }),
+    lines.length > 1 ? h('ul', { class: 'summary-list' }, lines.slice(1).map((l) => h('li', { text: l }))) : null,
+    !isNow ? h('p', { class: 'tiny', style: { margin: '6px 0 0' },
+      text: `Acute:chronic and monotony are read on ${formatDate(refDate, { weekday: false })}, the last day of this window — not today.` }) : null,
+  ]);
+}
+
+/* A section that starts folded, with one line saying what is inside. It
+   opens and closes in place — no re-render, so the page does not jump. */
+function fold(key, title, summary, build) {
+  let open = openFolds.has(key);
+  const body = h('div', { style: { display: open ? '' : 'none', marginTop: '8px' } }, [build()]);
+  const caret = h('span', { class: 'fold-caret', text: open ? '▾' : '▸' });
+  return h('div', { style: { marginTop: '22px' } }, [
+    h('button', {
+      class: 'fold-head',
+      onclick: () => {
+        open = !open;
+        if (open) openFolds.add(key); else openFolds.delete(key);
+        body.style.display = open ? '' : 'none';
+        caret.textContent = open ? '▾' : '▸';
+      },
+    }, [
+      caret,
+      h('span', { class: 'fold-title', text: title }),
+      h('span', { class: 'fold-sum', text: summary }),
+    ]),
+    body,
+  ]);
 }
 
 /* ---- 1. the week ------------------------------------------------------- */
 
-function weekPanel(days, acwr, monotony, cov) {
-  const cmp = hist.comparePeriods(days, 7);
-  const today = acwr[acwr.length - 1] || {};
-  const mono = monotony[monotony.length - 1] || {};
+function weekPanel(recentDays, acwrPoint, monoPoint, cov, isNow, refDate, days) {
+  const cmp = hist.comparePeriods(recentDays, 7);
+  const last7 = isNow ? 'Last 7 days' : `7 days to ${formatDate(refDate, { weekday: false })}`;
 
   const stats = h('div', { class: 'grid four' }, [
     h('div', { class: 'stat' }, [
-      h('div', { class: 'k', text: 'Last 7 days' }),
+      h('div', { class: 'k', text: last7 }),
       h('div', { class: 'v' }, [fmtLoad(cmp ? cmp.load : 0), h('span', { class: 'u', text: 'AU' })]),
       h('div', { class: 'n', text: cmp && cmp.change !== null
         ? `${cmp.change > 0 ? '+' : ''}${Math.round(cmp.change)}% vs the week before`
         : 'no earlier week to compare' }),
+      meaning('Load: each drill’s intensity × its minutes, added up. Only means something next to your own other weeks.'),
     ]),
     h('div', { class: 'stat' }, [
       h('div', { class: 'k', text: 'Training days' }),
       h('div', { class: 'v', text: String(cmp ? cmp.trainingDays : 0) }),
-      h('div', { class: 'n', text: `of the last 7 · ${Math.round((cmp ? cmp.minutes : 0))} min on court` }),
+      h('div', { class: 'n', text: `of those 7 · ${fmtDuration(cmp ? cmp.minutes : 0)} on court` }),
+      meaning('Days with at least one drill on the clock. Games are not clocked, so they are not counted here.'),
     ]),
-    monotonyStat(mono),
-    acwrStat(today),
+    monotonyStat(monoPoint),
+    acwrStat(acwrPoint),
   ]);
 
   return h('div', {}, [
@@ -139,12 +262,19 @@ function weekPanel(days, acwr, monotony, cov) {
   ]);
 }
 
+/** One line under a tile, in coaching words: what the number is and how to
+ *  read it. Asked for 2026-09-22 — "easier to read". */
+function meaning(text) {
+  return h('div', { class: 'meaning', text });
+}
+
 function monotonyStat(mono) {
   const flag = monotonyFlag(mono.monotony);
   return h('div', { class: 'stat' }, [
     h('div', { class: 'k', text: 'Monotony' }),
     h('div', { class: 'v', text: fmtRatio(mono.monotony) }),
     h('span', { class: `flag ${flag.level}`, text: flag.text }),
+    meaning('How alike the last 7 days were. Under 1.5: hard and easy days are clearly different. 2 or more: every day looks the same, with no easy day to recover on.'),
   ]);
 }
 
@@ -176,6 +306,7 @@ function acwrStat(today) {
       ? h('div', { class: 'n', text: note || 'Not enough history yet' })
       : h('span', { class: `flag ${flag.level}`, text: flag.text }),
     (value != null && note) ? h('div', { class: 'n', text: note }) : null,
+    meaning('The last 7 days against the average week of the last 4. Around 0.8–1.3: in line with what they are used to. Above 1.5: a sharp jump.'),
   ]);
 }
 
@@ -245,6 +376,87 @@ function coverageNote(cov) {
     h('strong', { text: 'incomplete, not low' }),
     '. Rate them from the Practice tab and these numbers will fill in.',
   ]);
+}
+
+/* ---- contact, week by week ------------------------------------------------
+ *
+ * The same definition and the same measure as the report: contact comes from
+ * the category (Settings), and contact TIME is the second stopwatch, so only
+ * the live part of a drill counts. A contact drill he did not time is
+ * "not timed" — never zero, never its full length.
+ *
+ * Weeks run down the page, newest first, so a whole season still fits on a
+ * tablet; the formats run across.
+ */
+const CONTACT_COLUMNS = [
+  { key: 'band:whole',        label: 'Whole contact' },
+  { key: 'band:contact5',     label: '5on5' },
+  { key: 'band:contactSmall', label: 'Small-sided' },
+  { key: 'band:transition',   label: 'Transition' },
+];
+
+function contactTime(agg) {
+  if (!agg || !agg.minutes) return h('span', { class: 'muted', text: '—' });
+  if (!agg.timedRuns) return h('div', {}, [
+    h('div', { class: 'muted', text: 'not timed' }),
+    h('div', { class: 'th-sub', text: `of ${fmtMinutes(agg.minutes)}` }),
+  ]);
+  return h('div', {}, [
+    h('div', { text: `${fmtMinutes(agg.liveMinutes)}${agg.liveCoverage < 0.999 ? ' *' : ''}` }),
+    h('div', { class: 'th-sub', text: `of ${fmtMinutes(agg.minutes)}` }),
+  ]);
+}
+
+function contactPanel(sessions, blocks, drills, range, contactRows, now) {
+  const wrap = h('div', { style: { marginTop: '22px' } }, [h('h3', { text: 'Contact' })]);
+  const byKey = new Map(now.rows.map((r) => [r.key, r]));
+  const whole = byKey.get('band:whole');
+  if (!whole || !whole.minutes) {
+    wrap.append(h('p', { class: 'small muted', text: 'No contact drills in this window. Which categories count as contact is set in Settings.' }));
+    return wrap;
+  }
+
+  wrap.append(h('div', { class: 'grid four' }, CONTACT_COLUMNS.map((c) => {
+    const agg = byKey.get(c.key);
+    return h('div', { class: 'stat' }, [
+      h('div', { class: 'k', text: c.label }),
+      h('div', { class: 'v', text: agg && agg.timedRuns ? fmtDuration(agg.liveMinutes) : '—' }),
+      h('div', { class: 'n', text: !agg || !agg.minutes ? 'none'
+        : !agg.timedRuns ? `not timed · ${fmtDuration(agg.minutes)} of drills`
+          : `live part of ${fmtDuration(agg.minutes)}${agg.liveCoverage < 0.999 ? ' · partly timed' : ''}` }),
+    ]);
+  })));
+
+  const t = hist.reportTable(sessions, blocks, drills, range, 'week', { contactRows });
+  const rowIndex = new Map(t.rows.map((r, i) => [r.key, i]));
+  const weeks = t.columns.filter((c) => c.total.minutes).reverse();
+  const dm = (k) => `${Number(k.slice(8, 10))}.${Number(k.slice(5, 7))}.`;
+  if (weeks.length > 1) {
+    wrap.append(h('div', { class: 'table-wrap', style: { marginTop: '12px' } }, [
+      h('table', {}, [
+        h('thead', {}, h('tr', {}, [
+          h('th', { text: 'Week' }),
+          ...CONTACT_COLUMNS.map((c) => h('th', { class: 'num', text: c.label })),
+        ])),
+        h('tbody', {}, weeks.map((w) => {
+          const from = w.from > range.from ? w.from : range.from;
+          const to = w.to < range.to ? w.to : range.to;
+          return h('tr', {}, [
+            h('td', { text: `${dm(from)}–${dm(to)}` }),
+            ...CONTACT_COLUMNS.map((c) => h('td', { class: 'num' },
+              contactTime(rowIndex.has(c.key) ? w.cells[rowIndex.get(c.key)] : null))),
+          ]);
+        })),
+      ]),
+    ]));
+  }
+
+  wrap.append(meaning('Contact time is the second stopwatch on contact drills — only the live part counts, so a shell drill counts once it goes live. Under each figure is the full drill time it was part of. * means only some of those drills were timed. Contact is kept apart from load on purpose: it is where collisions and awkward landings come from.'));
+  if (now.unclassified.runs) {
+    wrap.append(h('div', { class: 'note warn', style: { marginTop: '8px' } },
+      `${now.unclassified.runs} drill run${now.unclassified.runs === 1 ? '' : 's'} (${fmtMinutes(now.unclassified.minutes)}) could not be placed — usually a drill added during practice and not set up yet. They are missing from contact until it is.`));
+  }
+  return wrap;
 }
 
 /* ---- 2. the game week ---------------------------------------------------
@@ -486,8 +698,7 @@ function categoryPanel(rolls) {
 function drillPanel(rolls) {
   if (!rolls.length) return null;
 
-  return h('div', { style: { marginTop: '22px' } }, [
-    h('h3', { text: 'Your drills' }),
+  return h('div', {}, [
     h('div', { class: 'table-wrap' }, [
       h('table', {}, [
         h('thead', {}, h('tr', {}, [
@@ -677,21 +888,15 @@ function movementProfile(roll) {
  * warning from "his load is up 20%".
  */
 
-function squadPanel(sessions, blocks, players, range, days) {
-  const active = players.filter((p) => p.status !== 'inactive');
-  if (!active.length) return null;
-
-  const totals = hist.playerTotals(sessions, blocks, active, range).filter((t) => t.minutes > 0);
-  if (!totals.length) return null;
-
+function squadPanel(totals, range, days) {
   const median = medianOf(totals.map((t) => t.load));
   const tissueTotals = {};
   for (const t of TISSUE) tissueTotals[t.key] = days.reduce((s, d) => s + d.tissue[t.key], 0);
   const tissueCov = days.reduce((s, d) => s + d.minutes * d.tissueCoverage, 0)
     / Math.max(1, days.reduce((s, d) => s + d.minutes, 0));
+  const anyUntimed = totals.some((t) => t.contactUntimedMinutes > 0);
 
-  return h('div', { style: { marginTop: '22px' } }, [
-    h('h3', { text: 'The squad' }),
+  return h('div', {}, [
     h('div', { class: 'table-wrap' }, [
       h('table', {}, [
         h('thead', {}, h('tr', {}, [
@@ -714,13 +919,15 @@ function squadPanel(sessions, blocks, players, range, days) {
             h('td', { class: 'num', text: rel == null ? '—' : `${rel > 0 ? '+' : ''}${Math.round(rel)}%` }),
             h('td', { class: 'num', text: String(t.daysTrained) }),
             h('td', { class: 'num', text: String(Math.round(t.minutes)) }),
-            h('td', { class: 'num', text: `${Math.round(t.contactMinutes)}` }),
+            h('td', { class: 'num', text: `${fmtDuration(t.contactMinutes)}${t.contactUntimedMinutes > 0 ? ' *' : ''}` }),
           ]);
         })),
       ]),
     ]),
     h('p', { class: 'tiny', style: { marginTop: '6px' } },
-      'Compared against the squad median, not the average, so one player doing double does not move everyone else. Contact is minutes in contested work — counted separately from load on purpose, because it is where collisions and awkward landings come from.'),
+      'AU is his load; “vs squad” compares it with the squad median, not the average, so one player doing double does not move everyone else. Contact is his contact time — the live part of the contact drills he took part in, from the second stopwatch.'),
+    anyUntimed ? h('p', { class: 'tiny' },
+      '* Some of his contact drills were not timed, so his contact time is short by an amount nobody measured. It is not counted as zero, and not as the full drill length.') : null,
 
     h('h3', { style: { marginTop: '18px' }, text: 'Movement across the squad' }),
     h('div', { class: 'grid three' }, TISSUE.map((t) => h('div', { class: 'stat' }, [
@@ -772,8 +979,10 @@ function openPlayer(total, range, median) {
         ]),
         h('div', { class: 'stat' }, [
           h('div', { class: 'k', text: 'Contact' }),
-          h('div', { class: 'v', text: String(Math.round(total.contactMinutes)) }),
-          h('div', { class: 'n', text: 'minutes contested' }),
+          h('div', { class: 'v', text: fmtDuration(total.contactMinutes) }),
+          h('div', { class: 'n', text: total.contactUntimedMinutes > 0
+            ? `live contact time · plus ${fmtDuration(total.contactUntimedMinutes)} of contact drills not timed`
+            : 'live contact time, second stopwatch' }),
         ]),
         acwrStat(today),
       ]),

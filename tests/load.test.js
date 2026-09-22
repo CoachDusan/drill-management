@@ -7,7 +7,7 @@
 
 import {
   blockLiveDensity, blockLiveMinutes, sessionLiveDensity,
-  sessionLiveMinutesByPlayer, fmtDensity,
+  sessionLiveMinutesByPlayer, fmtDensity, fmtDuration,
   blockLoad, blockMinutes, participationOf, playerBlockLoad,
   sessionLoadByPlayer, sessionMinutesByPlayer, sessionTeamLoad,
   loadCoverage, sRPELoad, feltVsPrescribed, rpeCoverage, sessionGap, gapFlag, dailySeries, acwrSeries, monotonySeries, weekOverWeek,
@@ -334,6 +334,12 @@ eq('zero clock', fmtClock(0), '0:00');
   eq('renumbering does not reshuffle',
      renumber(orderedBlocks(dragged)).map((x) => x.id).join(''), 'cba');
 }
+
+/* ---- long totals, the way a coach says them ---- */
+ok('under an hour is minutes', fmtDuration(45.4) === '45 min', fmtDuration(45.4));
+ok('an hour and more is hours and minutes', fmtDuration(1450) === '24 h 10 min', fmtDuration(1450));
+ok('a round hour drops the minutes', fmtDuration(120) === '2 h', fmtDuration(120));
+ok('nothing is a dash, not zero', fmtDuration(null) === '—');
 
 print(`\n${pass} passed, ${fail} failed`);
 if (fail) throw new Error(`${fail} test(s) failed`);

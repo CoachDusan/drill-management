@@ -8,6 +8,8 @@
   --surface:   #ffffff;
   --surface-2: #eceef2;
   --line:      #d9dde4;
+  --contact-bg: #dfe4ec;
+  --contact-strong: #cfd6e1;
   --line-soft: #e8ebf0;
 
   --text:      #171a20;
@@ -47,6 +49,8 @@
     --surface:   #181c22;
     --surface-2: #212730;
     --line:      #2e353f;
+    --contact-bg: #28303b;
+    --contact-strong: #323c49;
     --line-soft: #252b34;
     --text:      #eef1f5;
     --text-2:    #a3adbb;
@@ -466,7 +470,14 @@ table.report .th-sub {
 }
 table.report .live-line { font-size: 13px; color: var(--text-2); margin-top: 2px; }
 table.report tr.emph td { font-weight: 650; background: var(--surface-2); }
-table.report tr.contact-group td { font-weight: 600; border-top: 2px solid var(--line); }
+/* Contact rows are a second cut of the same drills, not more categories, so
+   they have to look different at a glance: bold, on a darker shade, with a
+   heavy line where the categories end. Asked for 2026-09-26. */
+table.report tr.contact td { font-weight: 650; background: var(--contact-bg); }
+table.report tr.contact td .live-line { color: var(--text); font-weight: 600; }
+table.report tr.contact-group td { font-weight: 750; background: var(--contact-strong); border-top: 2px solid var(--line); }
+table.report tr.contact-first td { border-top: 3px solid var(--text-2); }
+table.report tr.contact.emph td { font-weight: 800; background: var(--contact-strong); border-top: 3px solid var(--text-2); }
 /* The same emphasis on any other table: the average row of a drill's spread,
    which is the line he actually plans with. */
 table tr.emph td { font-weight: 650; background: var(--surface-2); }

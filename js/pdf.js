@@ -342,20 +342,27 @@ function drawTable(pdf, block, startY, { accent, light }) {
       content: T(c.sub ? `${c.label}\n${c.sub}` : c.label),
       styles: { halign: align(i) },
     }))],
-    body: block.rows.map((r) => {
+    body: block.rows.map((r, ri) => {
       if (r.style === 'group') {
         return [{ content: T(r.cells[0]), colSpan: cols.length,
           styles: { fillColor: light, textColor: accent, fontStyle: 'bold', fontSize: fontSize + 0.4 } }];
       }
       const st = r.style === 'total' ? { fontStyle: 'bold', fillColor: [236, 236, 236] }
         : r.style === 'emph' ? { fontStyle: 'bold', fillColor: light }
-          : r.style === 'matchup-group' ? { fontStyle: 'bold', fillColor: [242, 242, 242] }
-            : r.style === 'matchup' ? { fillColor: [248, 248, 248] } : {};
+          // Contact rows are a second cut of the same drills: bold on a
+          // darker grey so they never read as more categories (2026-09-26).
+          : r.style === 'matchup-group' ? { fontStyle: 'bold', fillColor: [214, 218, 224], textColor: [10, 10, 10] }
+            : r.style === 'matchup' ? { fontStyle: 'bold', fillColor: [228, 231, 236], textColor: [10, 10, 10] } : {};
       // A row style wins over the column tint, so a total row still reads as
       // a total; an ordinary row keeps the emphasised column's own styling.
+      const isContact = (x) => x && ['matchup', 'matchup-group', 'emph'].includes(x.style);
+      const prev = block.rows[ri - 1];
+      // A heavy line where the categories end and the contact rows begin.
+      const divider = grid && isContact(r) && r.style !== 'emph' && prev && !isContact(prev)
+        ? { lineWidth: { top: 0.6, bottom: 0.2, left: 0.2, right: 0.2 }, lineColor: [60, 60, 60] } : {};
       return r.cells.map((cell, i) => ({
         content: T(cell),
-        styles: { ...st, halign: align(i) },
+        styles: { ...st, ...divider, halign: align(i) },
       }));
     }),
   });

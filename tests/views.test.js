@@ -973,6 +973,20 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
   contains('and all of them added up', root, 'Whole contact');
   contains('contact cells lead with contact time', root, ' contact');
 
+  // 2026-09-26: "the contact rows should be bolded darker, so I can see the
+  // difference between categories and contact rows." Every contact row
+  // carries the class, no category row does, and the first one draws the line.
+  {
+    const trs = root.querySelectorAll('tr');
+    const byLabel = (t) => trs.filter((r) => r.textContent.indexOf(t) === 0)[0];
+    const cls = (r) => (r ? r.className.split(' ') : []);
+    ok('a contact format row is marked as contact', cls(byLabel('5on5 contact')).includes('contact'));
+    ok('so is Whole contact', cls(byLabel('Whole contact')).includes('contact'));
+    ok('a category row is not', byLabel('Defense') && !cls(byLabel('Defense')).includes('contact'));
+    ok('the first contact row draws the dividing line', cls(byLabel('5on5 contact')).includes('contact-first'));
+    ok('and only the first', trs.filter((r) => cls(r).includes('contact-first')).length === 1);
+  }
+
   // The sentence he actually asked for: minutes of live game, not only a share.
   contains('cells carry live time in minutes', root, '15:00 live');
   contains('with the percentage beside it', root, '60%');

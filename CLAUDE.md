@@ -1213,6 +1213,38 @@ into a throwaway IndexedDB and screenshotted Analysis at 1280 and 900 px. That
 caught two faults no test did — "no earlier week to compare" at the start of
 a phase, and "1450:00 on court" — and a flag chip wrapping into ragged pieces.
 
+## A half-updated tablet, and darker contact rows (2026-09-26)
+
+**"The requested module '../models.js' does not provide an export named
+'offeredCategories'" on Drills, Analysis and Settings.** Nothing was missing:
+GitHub had the right files. The tablet was running a *new* screen against an
+*old* `models.js`. Two ways that happens, both now closed:
+
+- The worker installed its copy with `cache.add(url)`, which is allowed to use
+  the browser's own short-term copy of a file (GitHub Pages lets that be ten
+  minutes old). So a new version could be saved with one stale file in it. The
+  install now fetches with `cache: 'reload'`, and the background refresh with
+  `cache: 'no-cache'`.
+- The worker takes over an open page at once. A page keeps every file it has
+  already loaded, so a screen opened after the takeover can come from the new
+  version while `models.js` is still the old one in memory. "Try again" re-ran
+  the same import and could never fix it. Now a mismatch reloads the page once
+  by itself (guarded against a loop; a running practice survives a reload), and
+  "Try again" is a real reload.
+
+**Old reports needed no change.** Every report is worked out fresh from the
+recorded practices when it is opened, and categories that survive only on old
+runs are listed in Settings to be given a contact role. What he saw was most
+likely the old Reports screen still running from the same half-updated cache.
+A PDF he already exported is a file and stays as it was; export it again.
+
+**Contact rows are bold on a darker shade, with a heavy line where the
+categories end** — on screen (`tr.contact`, `contact-first`) and in the PDF.
+His words: so he can see the difference between categories and contact rows,
+which are a second cut of the same drills rather than more of them. A views
+test pins the classes and was checked to fail when the class was removed. The
+PDF was rendered and looked at; the screen was not seen in a real browser.
+
 ## Hosting
 
 Served by GitHub Pages from `main` / root:

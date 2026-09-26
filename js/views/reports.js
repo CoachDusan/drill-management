@@ -411,8 +411,13 @@ function tablePanel(table, perN = null) {
         ])),
         h('tbody', {}, table.rows.map((row, i) => {
           const contact = row.kind === 'matchup';
+          const first = contact && table.rows[i - 1] && table.rows[i - 1].kind !== 'matchup';
           return h('tr', {
-            class: row.emphasis ? 'emph' : row.level === 'group' ? 'contact-group' : '',
+            class: [
+              contact ? 'contact' : '',
+              row.emphasis ? 'emph' : row.level === 'group' ? 'contact-group' : '',
+              first ? 'contact-first' : '',
+            ].filter(Boolean).join(' '),
           }, [
             h('td', { style: row.level === 'part' ? { paddingLeft: '26px' } : null }, [
               h('div', { class: 'name', text: row.label }),

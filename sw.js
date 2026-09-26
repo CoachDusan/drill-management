@@ -9,7 +9,7 @@
  * it lives in IndexedDB on the device.
  */
 
-const VERSION = 'v13';
+const VERSION = 'v14';
 const CACHE = `load-tracker-${VERSION}`;
 
 const SHELL = [
@@ -54,7 +54,11 @@ self.addEventListener('install', (event) => {
       // what makes "it works online but not offline" so hard to diagnose.
       const failed = [];
       await Promise.all(SHELL.map((url) =>
-        cache.add(url).catch((err) => { failed.push({ url, error: String(err && err.message || err) }); })
+        // `reload` skips the browser's own short-term copy. Without it a new
+        // version could be saved beside a ten-minute-old file from the last
+        // one — which is how the tablet got a new Drills screen and an old
+        // models.js (2026-09-26).
+        cache.add(new Request(url, { cache: 'reload' })).catch((err) => { failed.push({ url, error: String(err && err.message || err) }); })
       ));
 
       const report = {
@@ -98,7 +102,9 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith(
     caches.match(req, { ignoreSearch: true }).then((cached) => {
-      const network = fetch(req)
+      // `no-cache` asks the server every time instead of trusting the
+      // browser's short-term copy, so the background refresh is really fresh.
+      const network = fetch(req, { cache: 'no-cache' })
         .then((res) => {
           if (res && res.ok) {
             const copy = res.clone();

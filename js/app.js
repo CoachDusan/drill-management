@@ -67,12 +67,34 @@ async function navigate() {
     window.scrollTo(0, 0);
   } catch (err) {
     console.error(err);
+    const message = String(err && err.message || err);
+    // A screen from the new version asked an older file for something it
+    // does not have yet: the app updated while it was open (seen on the
+    // tablet 2026-09-26, "does not provide an export named ..."). The page
+    // keeps every file it already loaded, so "Try again" can never fix it —
+    // only a fresh start does. Reload once by ourselves; a practice that is
+    // running survives a reload. The guard stops a loop if it is something else.
+    if (isVersionMismatch(message) && reloadOnce()) return;
     mount(mainEl, h('div', { class: 'card' }, [
       h('h2', { text: 'Something went wrong' }),
-      h('p', { class: 'muted small', text: String(err && err.message || err) }),
-      h('button', { class: 'btn', onclick: () => navigate() }, 'Try again'),
+      h('p', { class: 'muted small', text: message }),
+      h('button', { class: 'btn', onclick: () => location.reload() }, 'Try again'),
     ]));
   }
+}
+
+function isVersionMismatch(message) {
+  return /does not provide an export named|dynamically imported module|Importing a module script failed|error loading dynamically/i.test(message);
+}
+
+function reloadOnce() {
+  try {
+    const last = Number(sessionStorage.getItem('mismatchReloadAt') || 0);
+    if (Date.now() - last < 60000) return false;
+    sessionStorage.setItem('mismatchReloadAt', String(Date.now()));
+  } catch (_) { return false; }
+  location.reload();
+  return true;
 }
 
 /** Views call this to re-render themselves after a change. */

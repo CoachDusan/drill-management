@@ -1245,6 +1245,42 @@ which are a second cut of the same drills rather than more of them. A views
 test pins the classes and was checked to fail when the class was removed. The
 PDF was rendered and looked at; the screen was not seen in a real browser.
 
+## Contact during practice, and the tiles reordered (2026-09-28)
+
+Four items about reports and contact.
+
+- **The three-formats note is bold in the PDF** (`strongFootnotes` on the
+  report doc, `CONTACT_FORMATS` in `report-doc.js`). It is the definition the
+  contact section stands on; the other notes stay grey.
+- **Whole contact is framed all the way round** — PDF and screen. It is the
+  one total of the contact section and he wants it found first.
+- **A 5on5 contact tile on the live practice screen**, framed. "So I can see
+  through the practice how much live 5on5 they already did, not only after
+  practice in reports." It uses `reportRowsFor` — the same function as
+  Reports — so the number on the floor is the number in the report. Full time
+  is the big number and ticks every second; the live part appears when a
+  drill is stopped and its second-stopwatch time typed in, and until then it
+  says so rather than showing 0:00. Drills added courtside and not set up yet
+  have no category, so they cannot be counted, and the tile says how many.
+- **PDF tiles: Court time, Contact (full time), 5on5 (full time), Live time**
+  — his order, on every report, not only daily. Contact and 5on5 now lead
+  with FULL drill time, with the live part underneath ("29:59 / 31% of court
+  time / 13:40 live part of 29:59"; "24:11 / 13:40 live · 57%"). The previous
+  round led with contact (live) time; he found that harder to read.
+
+  **"5on5" is now the whole 5on5 contact format** (live + continuous 5on5on5
+  + shell once live), not only the 5on5 live category as the old "5on5 live"
+  tile was — matching his definition in the same message. Worth confirming
+  with him if a figure looks bigger than he expects.
+
+Verified: three deliberate breaks each failed (bold note dropped, 5on5 tile
+on all contact, practice tile on all contact). Sample PDFs were rendered
+page by page. The live practice tile was **not** seen in a real browser.
+
+The Reports views test had been dated "2 days ago / yesterday", which is last
+week on a Monday — it failed every Monday. It now dates its practices inside
+the current week.
+
 ## Hosting
 
 Served by GitHub Pages from `main` / root:

@@ -120,19 +120,24 @@ eq('chosen dates follow their column unit', reportKind('custom', 'week').breakdo
   ok('and never claims days outside the month', wk1.sub.split('\n')[0] === '1.3.', wk1.sub);
   ok('the file is named for what it is', plain.fileName === 'Weekly report 2026-03-02 to 2026-03-08.pdf', plain.fileName);
   eq('three practices counted', plain.tiles[0].value, '3');
-  eq('the tiles are the five he reads',
-    plain.tiles.map((t) => t.label), ['Practices', 'Court time', 'Live time', 'Contact', '5on5 live']);
-  /* Contact TIME is the second stopwatch on every contact drill (2026-09-22):
-     the 5on5 scrimmage's 12 live minutes plus the small-sided live work's 38.
-     Not the 92 minutes those drills ran for — only the live part is contact.
-     The unopposed shell drill is in neither. */
-  eq('contact is the live time of every contact drill', plain.tiles[3].value, '50:00');
-  ok('beside the drill time it was part of', plain.tiles[3].note.indexOf('92:00') !== -1, plain.tiles[3].note);
-  eq('and 5on5 live is the live part of the 5on5 live drills', plain.tiles[4].value, '12:00');
+  /* His order (2026-09-28): court time, contact, 5on5, and live time last. */
+  eq('the tiles are the five he reads, in his order',
+    plain.tiles.map((t) => t.label), ['Practices', 'Court time', 'Contact (full time)', '5on5 (full time)', 'Live time']);
+  /* Contact and 5on5 lead with FULL time; the live part (second stopwatch)
+     sits underneath. Contact drills ran 92 minutes of the week's 117, and 50
+     of those were live. The unopposed shell drill is in neither. */
+  eq('contact leads with the full time of every contact drill', plain.tiles[2].value, '92:00');
+  eq('then its share of court time', plain.tiles[2].note, '79% of court time');
+  eq('then the live part of it', plain.tiles[2].note2, '50:00 live part of 92:00');
+  eq('5on5 leads with its full time', plain.tiles[3].value, '20:00');
+  eq('then its live time and live %', plain.tiles[3].note, '12:00 live · 60%');
   ok('a partly timed cell brings its footnote', plain.footnotes.some((f) => f.indexOf('* This live or contact figure') === 0));
   ok('and how contact is counted travels with the report, in plain words',
     plain.footnotes.some((f) => f.indexOf('How contact is counted') === 0)
     && plain.footnotes.some((f) => f.indexOf('5on5 contact = Live') !== -1 && f.indexOf('3on3on3, 4on4on4') !== -1));
+  /* "Please bold that text" — the three formats line, and only that one. */
+  eq('the three-formats note is the one printed in bold',
+    plain.footnotes.filter((f) => plain.strongFootnotes.includes(f)).map((f) => f.slice(0, 13)), ['Three formats']);
 
   /* A contact cell leads with contact time, never with drill time — and an
      untimed contact drill is "not timed", not zero and not its full length. */
@@ -186,7 +191,7 @@ eq('chosen dates follow their column unit', reportKind('custom', 'week').breakdo
   /* "I don't need the icon practices 1 — because I know it is only 1." One
      practice, so the count goes and contact takes the space. */
   eq('a one-practice day drops the practice count and shows contact instead',
-    doc.tiles.map((t) => t.label), ['Court time', 'Live time', 'Contact', '5on5 live']);
+    doc.tiles.map((t) => t.label), ['Court time', 'Contact (full time)', '5on5 (full time)', 'Live time']);
 
   const sheet = doc.sections[0].blocks[0];
   eq('no row numbers and no group column — the rows are already in order',

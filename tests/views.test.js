@@ -204,6 +204,39 @@ ok('ticker updates the clock in place', typeof clocks[0].textContent === 'string
 ok('ticker did not blank the clock', clocks[0].textContent !== '', before);
 practice.teardown();
 
+/* ---- 5on5 contact during practice (2026-09-28) ----
+ * "So that I can see through the practice how much live 5on5 they already
+ * did." Transition and a 4v4 shell are running, so there is none yet — and
+ * that must say so, not show a live 0:00. Then a finished 5on5 live drill
+ * appears in the frame, full time first and the live part under it. */
+{
+  const frame = () => root.querySelector('[data-contact5]');
+  root = newRoot();
+  await practice.render(root);
+  await flush();
+  ok('the live practice screen has a 5on5 contact frame', !!frame());
+  contains('with none yet, it says so', frame(), 'no 5on5 contact yet');
+  practice.teardown();
+
+  const c5 = makeBlock({
+    sessionId: session.id, drillId: library[3].id, drillName: 'Live 5v5',
+    category: '5on5 live', situation: 1, contact: true,
+    intensity: 7.5, group: 'Team', running: false, elapsedMs: 20 * 60000, liveMs: 10 * 60000,
+    endedAt: '2026-08-18T10:40:00.000Z', createdAt: '2026-08-18T10:20:00.000Z',
+  });
+  await db.put(db.STORES.blocks, c5);
+  root = newRoot();
+  await practice.render(root);
+  await flush();
+  ok('the frame leads with the 5on5 full time', root.querySelector('[data-c5-full]').textContent === '20:00',
+    root.querySelector('[data-c5-full]').textContent);
+  contains('and the live part under it', frame(), '10:00 live · 50%');
+  runTimers();
+  ok('the ticker keeps the frame filled', root.querySelector('[data-c5-full]').textContent === '20:00');
+  practice.teardown();
+  await db.remove(db.STORES.blocks, c5.id);
+}
+
 /* ---- context tags persist ---- */
 root = newRoot();
 await practice.render(root);
@@ -944,8 +977,12 @@ for (const x of [gd1b, gd2, gdx, gdGame]) {
     date, gameDay, status: 'complete', rosterIds: [],
     endedAt: new Date().toISOString(),
   });
-  const s1 = mkSes(ago(2), 'GD-3');
-  const s2 = mkSes(ago(1), 'GD-1');
+  // Inside THIS week, whatever day it is. "2 days ago" and "yesterday" are
+  // last week on a Monday, and the screen opens on this week — so the suite
+  // went red every Monday with nothing wrong in the app.
+  const monday = addDays(TODAY, -((new Date().getDay() + 6) % 7));
+  const s1 = mkSes(monday, 'GD-3');
+  const s2 = mkSes(addDays(monday, 1), 'GD-1');
   await db.putMany(db.STORES.sessions, [s1, s2]);
 
   const mkBlk = (ses, drill, mins, liveMins) => makeBlock({

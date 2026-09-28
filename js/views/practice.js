@@ -446,11 +446,13 @@ async function startPractice() {
    ====================================================================== */
 
 async function renderLive(root, session) {
-  const [players, drills, blocks] = await Promise.all([
+  const [players, drills, blocks, contactRows] = await Promise.all([
     db.getAll(db.STORES.players),
     db.getAll(db.STORES.drills),
     db.getBy(db.STORES.blocks, 'sessionId', session.id),
+    db.getMeta('contactRows', null),
   ]);
+  liveContext = { drills, contactRows };
 
   const roster = players.filter((p) => (session.rosterIds || []).includes(p.id));
   const ordered = orderedBlocks(blocks);
@@ -487,6 +489,7 @@ async function renderLive(root, session) {
         h('div', { class: 'v', 'data-total-mins': '1', text: fmtMinutes(teamMins) }),
         h('div', { class: 'n', text: 'total across all drills' }),
       ]),
+      contact5Stat(ordered),
       h('div', { class: 'stat' }, [
         h('div', { class: 'k', text: 'Load so far' }),
         h('div', { class: 'v' }, [h('span', { 'data-total-load': '1', text: fmtLoad(teamLoad) }), h('span', { class: 'u', text: 'AU' })]),
@@ -532,6 +535,44 @@ async function renderLive(root, session) {
   );
 
   startTicker();
+}
+
+/* ---- 5on5 contact so far ----
+ *
+ * "So that I can see through the practice how much live 5on5 they already
+ * did, and not only after practice is finished" (2026-09-28). The same 5on5
+ * contact format as Reports — live + continuous (5on5on5) + shell once it
+ * goes live — worked out by the same function, so the number on the floor is
+ * the number in the report.
+ *
+ * Full time is the big number and ticks with the clock. The live part comes
+ * from the second stopwatch, which he types in on Stop, so it grows a drill at
+ * a time; until then it says so rather than showing 0:00. A drill started
+ * courtside and not set up yet has no category, so it cannot be counted —
+ * that is said too, never quietly left out. */
+let liveContext = { drills: [], contactRows: null };
+
+function contact5Figures(blocks) {
+  const r = hist.reportRowsFor(blocks, liveContext.drills, { contactRows: liveContext.contactRows });
+  const row = r.rows.find((x) => x.key === 'band:contact5') || { minutes: 0, timedRuns: 0 };
+  const full = row.minutes ? fmtMinutes(row.minutes) : '0:00';
+  const live = !row.minutes ? 'no 5on5 contact yet'
+    : !row.timedRuns ? 'live part: entered when you stop the drill'
+      : `${fmtMinutes(row.liveMinutes)} live · ${fmtDensity(row.liveDensity)}${row.liveCoverage < 0.999 ? ' (timed drills only)' : ''}`;
+  const pending = r.unclassified.runs
+    ? `${r.unclassified.runs} drill${r.unclassified.runs === 1 ? '' : 's'} not set up yet — not counted`
+    : '';
+  return { full, live, pending };
+}
+
+function contact5Stat(blocks) {
+  const f = contact5Figures(blocks);
+  return h('div', { class: 'stat contact5', 'data-contact5': '1' }, [
+    h('div', { class: 'k', text: '5on5 contact (full time)' }),
+    h('div', { class: 'v', 'data-c5-full': '1', text: f.full }),
+    h('div', { class: 'n c5-live', 'data-c5-live': '1', text: f.live }),
+    h('div', { class: 'n tiny', 'data-c5-pending': '1', text: f.pending || 'Live + continuous (5on5on5) + shell once live' }),
+  ]);
 }
 
 /** Live density, with the coverage that qualifies it. */
@@ -744,6 +785,8 @@ function updateTotals() {
   const minsEl = rootEl.querySelector('[data-total-mins]');
   if (loadEl) loadEl.textContent = fmtLoad(sessionTeamLoad(blocks));
   if (minsEl) minsEl.textContent = fmtMinutes(sessionTeamMinutes(blocks));
+  const c5El = rootEl.querySelector('[data-c5-full]');
+  if (c5El) c5El.textContent = contact5Figures(blocks).full;
 }
 
 /* ======================================================================

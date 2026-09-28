@@ -295,6 +295,10 @@ select {
 .stat .v { font-size: 29px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; margin-top: 3px; }
 .stat .u { font-size: 14px; font-weight: 600; color: var(--text-3); margin-left: 3px; }
 .stat .n { font-size: 13px; color: var(--text-2); margin-top: 3px; }
+/* 5on5 contact on the live practice screen: framed, so it is found at a
+   glance from across the floor (2026-09-28). */
+.stat.contact5 { border: 3px solid var(--text); background: var(--contact-bg); }
+.stat.contact5 .c5-live { color: var(--text); font-weight: 650; }
 
 /* ---- lists / tables ------------------------------------------------------ */
 
@@ -477,7 +481,10 @@ table.report tr.contact td { font-weight: 650; background: var(--contact-bg); }
 table.report tr.contact td .live-line { color: var(--text); font-weight: 600; }
 table.report tr.contact-group td { font-weight: 750; background: var(--contact-strong); border-top: 2px solid var(--line); }
 table.report tr.contact-first td { border-top: 3px solid var(--text-2); }
-table.report tr.contact.emph td { font-weight: 800; background: var(--contact-strong); border-top: 3px solid var(--text-2); }
+table.report tr.contact.emph td { font-weight: 800; background: var(--contact-strong); border-top: 3px solid var(--text); border-bottom: 3px solid var(--text); }
+/* Whole contact is framed all the way round (2026-09-28). */
+table.report tr.contact.emph td:first-child { border-left: 3px solid var(--text); }
+table.report tr.contact.emph td:last-child { border-right: 3px solid var(--text); }
 /* The same emphasis on any other table: the average row of a drill's spread,
    which is the line he actually plans with. */
 table tr.emph td { font-weight: 650; background: var(--surface-2); }

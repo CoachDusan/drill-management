@@ -159,7 +159,9 @@ export function renderReportPdf(model, branding = {}, JsPDF, { compress = true, 
   /* ---- tiles ---- */
   const gap = 5;
   const tw = (W - 2 * M - gap * (model.tiles.length - 1)) / model.tiles.length;
-  const th = 23;
+  // A tile with a second note line (Contact: % of court time, then the live
+  // part) makes every tile a line taller, so the row stays even.
+  const th = model.tiles.some((t) => t.note2) ? 27 : 23;
   model.tiles.forEach((t, i) => {
     const tx = M + i * (tw + gap);
     pdf.setDrawColor(222, 222, 222);
@@ -178,6 +180,7 @@ export function renderReportPdf(model, branding = {}, JsPDF, { compress = true, 
     pdf.setFontSize(7.5);
     pdf.setTextColor(110, 110, 110);
     pdf.text(pdf.splitTextToSize(T(t.note), tw - 9)[0] || '', tx + 6, y + 20);
+    if (t.note2) pdf.text(pdf.splitTextToSize(T(t.note2), tw - 9)[0] || '', tx + 6, y + 24);
   });
   y += th + 9;
 
@@ -253,15 +256,19 @@ export function renderReportPdf(model, branding = {}, JsPDF, { compress = true, 
     pdf.setTextColor(...accent);
     pdf.text('Notes', M, y);
     y += 5;
-    pdf.setFont('helvetica', 'normal');
+    const strong = new Set(model.strongFootnotes || []);
     pdf.setFontSize(7.8);
-    pdf.setTextColor(90, 90, 90);
-    for (const l of lines) {
+    model.footnotes.forEach((f, i) => {
+      // Bold text is wider, so a bold note is wrapped in bold.
+      const bold = strong.has(f);
+      pdf.setFont('helvetica', bold ? 'bold' : 'normal');
+      if (bold) pdf.setTextColor(25, 25, 25); else pdf.setTextColor(90, 90, 90);
+      const l = bold ? pdf.splitTextToSize(T(f), W - 2 * M - 4) : lines[i];
       if (y + l.length * 3.6 > H - 16) { pdf.addPage(); y = TOP + 3; }
       pdf.text('•', M, y);
       pdf.text(l, M + 4, y);
       y += l.length * 3.6 + 1.2;
-    }
+    });
   }
 
   /* ---- every page: continuation strip and footer ---- */
@@ -360,9 +367,15 @@ function drawTable(pdf, block, startY, { accent, light }) {
       // A heavy line where the categories end and the contact rows begin.
       const divider = grid && isContact(r) && r.style !== 'emph' && prev && !isContact(prev)
         ? { lineWidth: { top: 0.6, bottom: 0.2, left: 0.2, right: 0.2 }, lineColor: [60, 60, 60] } : {};
+      // Whole contact gets a heavy frame all the way round (2026-09-28): it is
+      // the one total of the contact section, and he wants it found first.
+      const last = r.cells.length - 1;
+      const frame = (i) => (r.style === 'emph'
+        ? { lineWidth: { top: 0.8, bottom: 0.8, left: i === 0 ? 0.8 : 0.2, right: i === last ? 0.8 : 0.2 }, lineColor: [20, 20, 20] }
+        : {});
       return r.cells.map((cell, i) => ({
         content: T(cell),
-        styles: { ...st, ...divider, halign: align(i) },
+        styles: { ...st, ...divider, ...frame(i), halign: align(i) },
       }));
     }),
   });

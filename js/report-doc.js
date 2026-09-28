@@ -136,6 +136,8 @@ export const CONTACT_EXPLAINED = [
   'Three formats. 5on5 contact = Live (5on5 live drills) + Continuous (5on5on5) + Shell (5on5 shell once live). Small-sided contact = Live (small-sided live drills) + Continuous (3on3on3, 4on4on4) + Shell (1on1 closeouts, 4on4 shell once live). Transition contact = advantage games with live play. Whole contact = all of them. Live and continuous drills always count; defense and transition drills only when they go live.',
   'The contact rows are a second look at the same drills, not extra time: a live transition drill appears once in its category and once in Transition contact.',
 ];
+/** The line with the three formats — printed in bold in the notes. */
+export const CONTACT_FORMATS = CONTACT_EXPLAINED[1];
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 /** "26.10." — how he writes dates himself ("26.10. till 22.12."). */
@@ -342,7 +344,7 @@ export function buildReportDoc({
   const totals = hist.aggregate(rangeBlocks);
   const bands = hist.reportRowsFor(rangeBlocks, drills, { categories, contactRows });
   const bandRow = (key) => bands.rows.find((r) => r.key === key) || { minutes: 0, timedRuns: 0 };
-  const c5 = bandRow('band:c5Live');
+  const c5 = bandRow('band:contact5');
   const whole = bandRow('band:whole');
   const n = inRange.length;
 
@@ -355,30 +357,42 @@ export function buildReportDoc({
     ? String(title).trim()
     : (gameDay ? `${kind.title} · ${gameDay}` : kind.title);
 
-  /* The tiles, in the order he reads them. On a daily report the practice
-     count is dropped — "I know it is only 1" — and contact takes its place.
-     Contact is every contact row added up; 5on5 live is the whole-squad row,
-     under the name he calls it. */
+  /* The tiles, in the order he reads them (2026-09-28): court time, contact,
+     5on5, and live time last. On a daily report the practice count is dropped
+     — "I know it is only 1".
+
+     CONTACT AND 5ON5 LEAD WITH FULL TIME. The big number is how long the
+     contact drills ran; the live part (the second stopwatch) sits under it.
+     His layout, from his own sketch:
+
+         CONTACT (FULL TIME)      5ON5 (FULL TIME)
+         29:59                    24:11
+         31% of court time        13:40 live · 57%
+         13:40 live part of 29:59
+
+     5on5 is the whole 5on5 contact format — live + continuous (5on5on5) +
+     shell once live — the same figure the live practice screen shows.
+     Untimed is still "not timed", never 0:00 live. */
+  const star = (agg) => (agg.liveCoverage < 0.999 ? ' *' : '');
   const tiles = [
     ...(kind.key === 'day' && n === 1 ? [] : [
       { label: 'Practices', value: String(n), note: `${plural(totals.runs, 'drill run')}` }]),
     { label: 'Court time', value: fmtMinutes(totals.minutes),
       note: perN ? `${fmtMinutes(totals.minutes / perN)} per practice` : 'every drill, full time' },
+    { label: 'Contact (full time)', value: whole.minutes ? fmtMinutes(whole.minutes) : '—',
+      note: !whole.minutes ? 'no contact drills'
+        : `${Math.round((whole.minutes / (totals.minutes || 1)) * 100)}% of court time`,
+      note2: !whole.minutes ? null
+        : !whole.timedRuns ? 'live part not timed'
+          : `${fmtMinutes(whole.liveMinutes)} live part of ${fmtMinutes(whole.minutes)}${star(whole)}` },
+    { label: '5on5 (full time)', value: c5.minutes ? fmtMinutes(c5.minutes) : '—',
+      note: !c5.minutes ? 'none in these dates'
+        : !c5.timedRuns ? 'live part not timed'
+          : `${fmtMinutes(c5.liveMinutes)} live · ${fmtDensity(c5.liveDensity)}${star(c5)}` },
     { label: 'Live time', value: totals.timedRuns ? fmtMinutes(totals.liveMinutes) : '—',
       note: totals.timedRuns
         ? `${fmtDensity(totals.liveDensity)} live · ${Math.round(totals.liveCoverage * 100)}% of court time timed`
         : 'second stopwatch not used' },
-    // Kept short on purpose: five tiles across a landscape page leave room
-    // for one line, and a note that runs off the tile reads as a mistake.
-    // Contact time is the second stopwatch on the contact drills.
-    { label: 'Contact', value: whole.timedRuns ? fmtMinutes(whole.liveMinutes) : '—',
-      note: !whole.minutes ? 'no contact drills'
-        : !whole.timedRuns ? `not timed · ${fmtMinutes(whole.minutes)} drills`
-          : `live part of ${fmtMinutes(whole.minutes)}${whole.liveCoverage < 0.999 ? ' *' : ''}` },
-    { label: '5on5 live', value: c5.timedRuns ? fmtMinutes(c5.liveMinutes) : '—',
-      note: !c5.minutes ? 'none in these dates'
-        : !c5.timedRuns ? `not timed · ${fmtMinutes(c5.minutes)} drills`
-          : `live part of ${fmtMinutes(c5.minutes)}${c5.liveCoverage < 0.999 ? ' *' : ''}` },
   ];
 
   const doc = {
@@ -389,6 +403,10 @@ export function buildReportDoc({
     tiles,
     sections: [],
     footnotes: [],
+    // Notes printed in bold. The three contact formats are the definition
+    // the whole contact section stands on, so he asked for them to stand out
+    // from the rest of the notes (2026-09-28).
+    strongFootnotes: [CONTACT_FORMATS],
     fileName: `${heading.replace(/[\\/:*?"<>|]/g, '-')} ${range.from}${range.to !== range.from ? ` to ${range.to}` : ''}.pdf`,
   };
 
